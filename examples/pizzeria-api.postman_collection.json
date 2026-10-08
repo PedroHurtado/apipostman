@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "Pizzería API - Tests deterministas",
-    "description": "Colección generada a partir de la especificación OpenAPI (/v3/api-docs).\n\nDeterminismo:\n- Cada ejecución crea sus propios ingredientes y pizzas con un sufijo único (runId) y los borra al final.\n- Los precios esperados se calculan a partir de costes conocidos: precio = suma de costes + 20 %.\n- Los listados nunca se comparan contra datos semilla: se verifica inclusión/exclusión de los datos propios.\n- No hay asserts de tiempo de respuesta ni dependencias del orden de los datos existentes.\n\nEjecutar la colección completa y en orden (Collection Runner o newman) con el environment pizzeria-dev.",
+    "name": "Pizzería API - Tests independientes",
+    "description": "Colección generada a partir de la especificación OpenAPI (/v3/api-docs).\n\nCada petición es independiente: se puede ejecutar sola, en cualquier orden o en paralelo.\n\nPatrón Arrange / Act / Assert / Teardown:\n- Pre-request: hace su propio login y crea sus fixtures con un nombre único (qa.arrange).\n- Petición: la acción bajo prueba.\n- Tests: aserciones, verificaciones extra y borrado de todo lo creado (qa.finish).\n\nLa librería qaLib vive en el pre-request de la colección y se reinicia en cada petición.\nPrecio esperado = suma de costes de ingredientes + 20 %.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -16,104 +16,182 @@
   },
   "event": [
     {
-      "listen": "test",
+      "listen": "prerequest",
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Comprobación común: toda respuesta con cuerpo debe ser JSON válido",
-          "if (pm.response.text().length > 0 && pm.response.code === 200) {",
-          "  pm.test(\"[común] El cuerpo es JSON válido\", () => pm.response.json());",
-          "}"
+          "// Estado de la petición actual: se reinicia antes de CADA petición,",
+          "// así ninguna petición hereda nada de la anterior.",
+          "qaState = { fx: {}, cleanup: [], error: undefined };",
+          "",
+          "qaLib = (pm) => {",
+          "  const base = () => pm.environment.get(\"baseUrl\");",
+          "",
+          "  const send = (method, path, body, token) => new Promise((resolve, reject) => pm.sendRequest({",
+          "    url: base() + path,",
+          "    method,",
+          "    header: Object.assign(",
+          "      { \"Content-Type\": \"application/json\" },",
+          "      token ? { Authorization: \"Bearer \" + token } : {}",
+          "    ),",
+          "    body: body === undefined ? undefined : { mode: \"raw\", raw: JSON.stringify(body) }",
+          "  }, (err, res) => err ? reject(err) : resolve(res)));",
+          "",
+          "  const ok = (res, what) => {",
+          "    if (res.code < 200 || res.code > 299) throw new Error(what + \" -> HTTP \" + res.code + \" \" + res.text());",
+          "    return res;",
+          "  };",
+          "",
+          "  const qa = {",
+          "    send,",
+          "    fx: qaState.fx,",
+          "",
+          "    // Identificador único: los datos de cada petición nunca colisionan con otros",
+          "    uid: () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8),",
+          "",
+          "    // Guarda un valor como fixture y como variable local ({{clave}} en URL/body)",
+          "    set: (key, value) => { qaState.fx[key] = value; pm.variables.set(key, value); return value; },",
+          "",
+          "    async login() {",
+          "      const res = ok(await send(\"POST\", \"/api/auth/login\", {",
+          "        username: pm.environment.get(\"username\"),",
+          "        password: pm.environment.get(\"password\")",
+          "      }), \"login\");",
+          "      const tokens = res.json();",
+          "      qa.set(\"accessToken\", tokens.accessToken);",
+          "      qa.set(\"refreshToken\", tokens.refreshToken);",
+          "      return tokens;",
+          "    },",
+          "",
+          "    track(kind, id) { qaState.cleanup.push({ kind, id }); },",
+          "",
+          "    async createIngredient(name, cost, vegetarian) {",
+          "      const res = ok(await send(\"POST\", \"/api/ingredients\", { name, cost, vegetarian }, qaState.fx.accessToken), \"crear ingrediente\");",
+          "      const ing = res.json();",
+          "      qa.track(\"ingredients\", ing.id);",
+          "      return ing;",
+          "    },",
+          "",
+          "    async createPizza(name, ingredientIds, description) {",
+          "      const res = ok(await send(\"POST\", \"/api/pizzas\", { name, description, ingredientIds }, qaState.fx.accessToken), \"crear pizza\");",
+          "      const pizza = res.json();",
+          "      qa.track(\"pizzas\", pizza.id);",
+          "      return pizza;",
+          "    },",
+          "",
+          "    // Id que con seguridad no existe: se crea un recurso y se borra",
+          "    async deletedId(kind) {",
+          "      const res = kind === \"ingredients\"",
+          "        ? await qa.createIngredient(\"QA borrado \" + qa.uid(), 1, true)",
+          "        : await qa.createPizza(\"QA borrada \" + qa.uid(), [(await qa.createIngredient(\"QA ing \" + qa.uid(), 1, true)).id]);",
+          "      ok(await send(\"DELETE\", \"/api/\" + kind + \"/\" + res.id, undefined, qaState.fx.accessToken), \"borrar \" + kind);",
+          "      qaState.cleanup = qaState.cleanup.filter(c => !(c.kind === kind && c.id === res.id));",
+          "      return res.id;",
+          "    },",
+          "",
+          "    // Pre-request: prepara los datos que necesita la petición",
+          "    arrange(fn) {",
+          "      (async () => { await fn(qa); })().catch(e => { qaState.error = String(e && e.message || e); });",
+          "    },",
+          "",
+          "    // Si la petición ha creado un recurso, se registra para borrarlo",
+          "    trackResponse(kind) {",
+          "      if (pm.response.code >= 200 && pm.response.code < 300) {",
+          "        try { const id = pm.response.json().id; if (id !== undefined) qa.track(kind, id); } catch (e) { }",
+          "      }",
+          "    },",
+          "",
+          "    // Tests: verificaciones asíncronas opcionales y, siempre, limpieza",
+          "    finish(verify) {",
+          "      pm.test(\"[arrange] fixtures preparados\", () => pm.expect(qaState.error, qaState.error).to.be.undefined);",
+          "      (async () => {",
+          "        try {",
+          "          if (verify) await verify(qa);",
+          "        } catch (e) {",
+          "          pm.test(\"[verify] sin errores\", () => { throw e; });",
+          "        } finally {",
+          "          await qa.cleanup();",
+          "        }",
+          "      })();",
+          "    },",
+          "",
+          "    async cleanup() {",
+          "      if (qaState.cleanup.length === 0) return;",
+          "      // Token propio: la petición puede haber invalidado el suyo (logout)",
+          "      const token = ok(await send(\"POST\", \"/api/auth/login\", {",
+          "        username: pm.environment.get(\"username\"),",
+          "        password: pm.environment.get(\"password\")",
+          "      }), \"login teardown\").json().accessToken;",
+          "      const results = [];",
+          "      for (const { kind, id } of qaState.cleanup.slice().reverse()) {",
+          "        const res = await send(\"DELETE\", \"/api/\" + kind + \"/\" + id, undefined, token);",
+          "        results.push({ kind, id, code: res.code });",
+          "      }",
+          "      qaState.cleanup = [];",
+          "      pm.test(\"[teardown] datos de prueba eliminados\", () => {",
+          "        results.forEach(r => pm.expect([200, 204, 404], r.kind + \"/\" + r.id).to.include(r.code));",
+          "      });",
+          "    },",
+          "",
+          "    // ----- Aserciones reutilizables -----",
+          "    expectIngredient(ing, expected) {",
+          "      pm.test(\"Ingrediente: estructura y valores\", () => {",
+          "        pm.expect(ing.id).to.be.a(\"number\");",
+          "        pm.expect(ing.name).to.eql(expected.name);",
+          "        pm.expect(ing.cost).to.be.closeTo(expected.cost, 0.001);",
+          "        pm.expect(ing.vegetarian).to.eql(expected.vegetarian);",
+          "      });",
+          "    },",
+          "",
+          "    expectPizza(p, expected) {",
+          "      const price = Math.round(expected.cost * 1.2 * 100) / 100;",
+          "      pm.test(\"Pizza: estructura\", () => {",
+          "        pm.expect(p.id).to.be.a(\"number\");",
+          "        pm.expect(p.name).to.eql(expected.name);",
+          "        pm.expect(p.ingredients).to.be.an(\"array\");",
+          "        [\"ingredientsCost\", \"profitMargin\", \"price\"].forEach(k => pm.expect(p[k], k).to.be.a(\"number\"));",
+          "      });",
+          "      pm.test(\"Pizza: contiene exactamente los ingredientes enviados\", () => {",
+          "        const sort = a => a.slice().sort((x, y) => x - y);",
+          "        pm.expect(sort(p.ingredients.map(i => i.id))).to.eql(sort(expected.ingredientIds));",
+          "      });",
+          "      pm.test(\"Pizza: ingredientsCost = \" + expected.cost, () => {",
+          "        pm.expect(p.ingredientsCost).to.be.closeTo(p.ingredients.reduce((a, i) => a + i.cost, 0), 0.001);",
+          "        pm.expect(p.ingredientsCost).to.be.closeTo(expected.cost, 0.001);",
+          "      });",
+          "      pm.test(\"Pizza: price = ingredientsCost + 20 % = \" + price, () => {",
+          "        pm.expect(p.price).to.be.closeTo(price, 0.01);",
+          "      });",
+          "      pm.test(\"Pizza: vegetarian = \" + expected.vegetarian, () => {",
+          "        pm.expect(p.vegetarian).to.eql(expected.vegetarian);",
+          "        pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
+          "      });",
+          "    }",
+          "  };",
+          "  return qa;",
+          "};"
         ]
       }
     }
   ],
-  "variable": [
-    {
-      "key": "runId",
-      "value": ""
-    },
-    {
-      "key": "accessToken",
-      "value": ""
-    },
-    {
-      "key": "refreshToken",
-      "value": ""
-    },
-    {
-      "key": "ingAName",
-      "value": ""
-    },
-    {
-      "key": "ingBName",
-      "value": ""
-    },
-    {
-      "key": "ingCName",
-      "value": ""
-    },
-    {
-      "key": "ingAId",
-      "value": ""
-    },
-    {
-      "key": "ingBId",
-      "value": ""
-    },
-    {
-      "key": "ingCId",
-      "value": ""
-    },
-    {
-      "key": "pizzaVegName",
-      "value": ""
-    },
-    {
-      "key": "pizzaMixName",
-      "value": ""
-    },
-    {
-      "key": "pizzaVegId",
-      "value": ""
-    },
-    {
-      "key": "pizzaMixId",
-      "value": ""
-    }
-  ],
   "item": [
     {
-      "name": "00 - Setup",
-      "description": "Genera un identificador único de ejecución y obtiene los tokens. Los datos de prueba se crean desde cero, por lo que los tests no dependen del estado previo de la base de datos.",
+      "name": "01 - Autenticación",
+      "description": "Cada petición hace su propio login cuando lo necesita.",
       "item": [
         {
-          "name": "Login (admin)",
+          "name": "Login correcto",
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Sufijo único por ejecución: evita colisiones con datos de ejecuciones anteriores",
-                  "const runId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);",
-                  "pm.collectionVariables.set(\"runId\", runId);",
-                  "pm.collectionVariables.set(\"ingAName\", \"QA Ing A \" + runId);",
-                  "pm.collectionVariables.set(\"ingBName\", \"QA Ing B \" + runId);",
-                  "pm.collectionVariables.set(\"ingCName\", \"QA Ing C \" + runId);",
-                  "pm.collectionVariables.set(\"pizzaVegName\", \"QA Veg \" + runId);",
-                  "pm.collectionVariables.set(\"pizzaMixName\", \"QA Mix \" + runId);"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
                   "",
-                  "const tokenSchema = {",
+                  "const t = pm.response.json();",
+                  "pm.test(\"Cumple el esquema TokenResponse\", () => pm.response.to.have.jsonSchema({",
                   "  type: \"object\",",
                   "  required: [\"accessToken\", \"refreshToken\", \"tokenType\", \"expiresIn\"],",
                   "  properties: {",
@@ -122,13 +200,14 @@
                   "    tokenType: { type: \"string\" },",
                   "    expiresIn: { type: \"integer\", minimum: 1 }",
                   "  }",
-                  "};",
-                  "const t = pm.response.json();",
-                  "pm.test(\"Cumple el esquema TokenResponse\", () => pm.response.to.have.jsonSchema(tokenSchema));",
+                  "}));",
                   "pm.test(\"tokenType es Bearer\", () => pm.expect(t.tokenType.toLowerCase()).to.eql(\"bearer\"));",
                   "pm.test(\"accessToken y refreshToken son distintos\", () => pm.expect(t.accessToken).to.not.eql(t.refreshToken));",
-                  "pm.collectionVariables.set(\"accessToken\", t.accessToken);",
-                  "pm.collectionVariables.set(\"refreshToken\", t.refreshToken);"
+                  "qa.finish(async (qa) => {",
+                  "  const me = await qa.send(\"GET\", \"/api/auth/me\", undefined, t.accessToken);",
+                  "  pm.test(\"El accessToken obtenido es válido en /me\", () => pm.expect(me.code).to.eql(200));",
+                  "  await qa.send(\"POST\", \"/api/auth/logout\", undefined, t.accessToken);",
+                  "});"
                 ]
               }
             }
@@ -165,129 +244,19 @@
               "type": "noauth"
             }
           }
-        }
-      ]
-    },
-    {
-      "name": "01 - Autenticación",
-      "description": "Login, usuario actual, refresh y casos negativos.",
-      "item": [
-        {
-          "name": "Me - usuario del token",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "const u = pm.response.json();",
-                  "pm.test(\"username coincide con el del login\", () => pm.expect(u.username).to.eql(pm.environment.get(\"username\")));",
-                  "pm.test(\"expiresIn es un entero positivo\", () => {",
-                  "  pm.expect(u.expiresIn).to.be.a(\"number\");",
-                  "  pm.expect(u.expiresIn).to.be.above(0);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "me"
-              ]
-            }
-          }
         },
         {
-          "name": "Me - sin token -> 401",
+          "name": "Login con contraseña incorrecta -> 401",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "me"
-              ]
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        },
-        {
-          "name": "Me - token inventado -> 401",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "me"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "token-que-no-existe",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Login - contraseña incorrecta -> 401",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
-                  "pm.test(\"No devuelve tokens\", () => pm.expect(pm.response.text()).to.not.include(\"accessToken\"));"
+                  "pm.test(\"No devuelve tokens\", () => pm.expect(pm.response.text()).to.not.include(\"accessToken\"));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -326,14 +295,75 @@
           }
         },
         {
-          "name": "Login - sin password -> 400",
+          "name": "Login con usuario inexistente -> 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  qa.set(\"ghostUser\", \"no-existe-\" + qa.uid());",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{ghostUser}}\",\n  \"password\": \"x\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Login sin password -> 400",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -372,16 +402,152 @@
           }
         },
         {
-          "name": "Refresh - canjea el refresh token",
+          "name": "Me - usuario del token",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const u = pm.response.json();",
+                  "pm.test(\"username coincide con el del login\", () => pm.expect(u.username).to.eql(pm.environment.get(\"username\")));",
+                  "pm.test(\"expiresIn es un entero positivo\", () => {",
+                  "  pm.expect(Number.isInteger(u.expiresIn)).to.be.true;",
+                  "  pm.expect(u.expiresIn).to.be.above(0);",
+                  "});",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Me sin token -> 401",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Me con token inventado -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "token-inventado",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Refresh - canjea el refresh token",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
                   "",
-                  "const tokenSchema = {",
+                  "const t = pm.response.json();",
+                  "pm.test(\"Cumple el esquema TokenResponse\", () => pm.response.to.have.jsonSchema({",
                   "  type: \"object\",",
                   "  required: [\"accessToken\", \"refreshToken\", \"tokenType\", \"expiresIn\"],",
                   "  properties: {",
@@ -390,12 +556,13 @@
                   "    tokenType: { type: \"string\" },",
                   "    expiresIn: { type: \"integer\", minimum: 1 }",
                   "  }",
-                  "};",
-                  "const t = pm.response.json();",
-                  "pm.test(\"Cumple el esquema TokenResponse\", () => pm.response.to.have.jsonSchema(tokenSchema));",
-                  "pm.test(\"Devuelve un access token nuevo\", () => pm.expect(t.accessToken).to.not.eql(pm.collectionVariables.get(\"accessToken\")));",
-                  "pm.collectionVariables.set(\"accessToken\", t.accessToken);",
-                  "pm.collectionVariables.set(\"refreshToken\", t.refreshToken);"
+                  "}));",
+                  "pm.test(\"tokenType es Bearer\", () => pm.expect(t.tokenType.toLowerCase()).to.eql(\"bearer\"));",
+                  "pm.test(\"Devuelve un access token nuevo\", () => pm.expect(t.accessToken).to.not.eql(qaState.fx.accessToken));",
+                  "qa.finish(async (qa) => {",
+                  "  const me = await qa.send(\"GET\", \"/api/auth/me\", undefined, t.accessToken);",
+                  "  pm.test(\"El nuevo accessToken es válido en /me\", () => pm.expect(me.code).to.eql(200));",
+                  "});"
                 ]
               }
             }
@@ -434,44 +601,16 @@
           }
         },
         {
-          "name": "Me - con el token refrescado",
+          "name": "Refresh con token inventado -> 401",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"username coincide\", () => pm.expect(pm.response.json().username).to.eql(pm.environment.get(\"username\")));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "me"
-              ]
-            }
-          }
-        },
-        {
-          "name": "Refresh - token inválido -> 401",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -508,42 +647,172 @@
               "type": "noauth"
             }
           }
+        },
+        {
+          "name": "Refresh sin refreshToken -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Logout invalida el access token",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 200/204 (sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));",
+                  "qa.finish(async (qa) => {",
+                  "  const me = await qa.send(\"GET\", \"/api/auth/me\", undefined, qa.fx.accessToken);",
+                  "  pm.test(\"El token ya no es válido tras el logout\", () => pm.expect(me.code).to.eql(401));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Logout sin token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
         }
       ]
     },
     {
       "name": "02 - Ingredientes",
-      "description": "Crea tres ingredientes propios (A y B vegetarianos, C no vegetariano) con costes conocidos.",
+      "description": "Cada petición crea los ingredientes que necesita y los borra al terminar.",
       "item": [
         {
-          "name": "Crear ingrediente A (veg, 1.25)",
+          "name": "Crear ingrediente",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" Ingrediente\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
-                  "",
-                  "",
-                  "const ingredientSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    cost: { type: \"number\" },",
-                  "    vegetarian: { type: \"boolean\" }",
-                  "  }",
-                  "};",
-                  "const i = pm.response.json();",
-                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
-                  "pm.test(\"Datos persistidos correctamente\", () => {",
-                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingAName\"));",
-                  "  pm.expect(i.cost).to.be.closeTo(1.25, 0.001);",
-                  "  pm.expect(i.vegetarian).to.eql(true);",
-                  "});",
-                  "pm.collectionVariables.set(\"ingAId\", pm.response.json().id);"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"ingredients\");",
+                  "pm.test(\"Status 200/201 (creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const ing = pm.response.json();",
+                  "qa.expectIngredient(ing, { name: qaState.fx.name, cost: 1.25, vegetarian: true });",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/ingredients/\" + ing.id);",
+                  "  pm.test(\"Queda persistido\", () => {",
+                  "    pm.expect(res.code).to.eql(200);",
+                  "    pm.expect(res.json()).to.eql(ing);",
+                  "  });",
+                  "});"
                 ]
               }
             }
@@ -568,7 +837,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"{{ingAName}}\",\n  \"cost\": 1.25,\n  \"vegetarian\": true\n}",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"cost\": 1.25,\n  \"vegetarian\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -578,158 +847,33 @@
           }
         },
         {
-          "name": "Crear ingrediente B (veg, 0.75)",
+          "name": "Obtener ingrediente por id",
           "event": [
             {
-              "listen": "test",
+              "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
-                  "",
-                  "",
-                  "const ingredientSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    cost: { type: \"number\" },",
-                  "    vegetarian: { type: \"boolean\" }",
-                  "  }",
-                  "};",
-                  "const i = pm.response.json();",
-                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
-                  "pm.test(\"Datos persistidos correctamente\", () => {",
-                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingBName\"));",
-                  "  pm.expect(i.cost).to.be.closeTo(0.75, 0.001);",
-                  "  pm.expect(i.vegetarian).to.eql(true);",
-                  "});",
-                  "pm.collectionVariables.set(\"ingBId\", pm.response.json().id);"
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
                 ]
               }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients"
-              ]
             },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"{{ingBName}}\",\n  \"cost\": 0.75,\n  \"vegetarian\": true\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          }
-        },
-        {
-          "name": "Crear ingrediente C (no veg, 2.00)",
-          "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
-                  "",
-                  "",
-                  "const ingredientSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    cost: { type: \"number\" },",
-                  "    vegetarian: { type: \"boolean\" }",
-                  "  }",
-                  "};",
-                  "const i = pm.response.json();",
-                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
-                  "pm.test(\"Datos persistidos correctamente\", () => {",
-                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingCName\"));",
-                  "  pm.expect(i.cost).to.be.closeTo(2, 0.001);",
-                  "  pm.expect(i.vegetarian).to.eql(false);",
-                  "});",
-                  "pm.collectionVariables.set(\"ingCId\", pm.response.json().id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"{{ingCName}}\",\n  \"cost\": 2,\n  \"vegetarian\": false\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          }
-        },
-        {
-          "name": "Obtener ingrediente A por id",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "",
-                  "",
-                  "const ingredientSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    cost: { type: \"number\" },",
-                  "    vegetarian: { type: \"boolean\" }",
-                  "  }",
-                  "};",
-                  "const i = pm.response.json();",
-                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
-                  "pm.test(\"Datos persistidos correctamente\", () => {",
-                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingAName\"));",
-                  "  pm.expect(i.cost).to.be.closeTo(1.25, 0.001);",
-                  "  pm.expect(i.vegetarian).to.eql(true);",
-                  "});",
-                  "pm.test(\"id coincide\", () => pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"ingAId\"))));"
+                  "qa.expectIngredient(pm.response.json(), { name: qaState.fx.tag + \" A\", cost: 1.5, vegetarian: true });",
+                  "pm.test(\"id coincide\", () => pm.expect(pm.response.json().id).to.eql(qaState.fx.ingAId));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -754,20 +898,84 @@
           }
         },
         {
-          "name": "Listar ingredientes (público)",
+          "name": "Obtener ingrediente inexistente -> 404",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"missingId\", await qa.deletedId(\"ingredients\"));",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{missingId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{missingId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Listar ingredientes",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
                   "const list = pm.response.json();",
                   "const ids = list.map(i => i.id);",
-                  "const v = (k) => Number(pm.collectionVariables.get(k));",
-                  "pm.test(\"Es un array\", () => pm.expect(list).to.be.an(\"array\"));",
-                  "pm.test(\"Incluye los tres ingredientes creados\", () => pm.expect(ids).to.include.members([v(\"ingAId\"), v(\"ingBId\"), v(\"ingCId\")]));",
-                  "pm.test(\"No hay ids duplicados\", () => pm.expect(new Set(ids).size).to.eql(ids.length));"
+                  "pm.test(\"Es un array sin ids duplicados\", () => {",
+                  "  pm.expect(list).to.be.an(\"array\");",
+                  "  pm.expect(new Set(ids).size).to.eql(ids.length);",
+                  "});",
+                  "pm.test(\"Incluye los ingredientes creados\", () => pm.expect(ids).to.include.members([qaState.fx.ingAId, qaState.fx.ingBId, qaState.fx.ingCId]));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -794,17 +1002,33 @@
           "name": "Listar ingredientes vegetarian=true",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
                   "const list = pm.response.json();",
                   "const ids = list.map(i => i.id);",
-                  "const v = (k) => Number(pm.collectionVariables.get(k));",
                   "pm.test(\"Todos son vegetarianos\", () => pm.expect(list.every(i => i.vegetarian === true)).to.be.true);",
-                  "pm.test(\"Incluye A y B\", () => pm.expect(ids).to.include.members([v(\"ingAId\"), v(\"ingBId\")]));",
-                  "pm.test(\"No incluye C\", () => pm.expect(ids).to.not.include(v(\"ingCId\")));"
+                  "pm.test(\"Incluye A y B\", () => pm.expect(ids).to.include.members([qaState.fx.ingAId, qaState.fx.ingBId]));",
+                  "pm.test(\"No incluye C\", () => pm.expect(ids).to.not.include(qaState.fx.ingCId));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -837,17 +1061,33 @@
           "name": "Listar ingredientes vegetarian=false",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
                   "const list = pm.response.json();",
                   "const ids = list.map(i => i.id);",
-                  "const v = (k) => Number(pm.collectionVariables.get(k));",
                   "pm.test(\"Ninguno es vegetariano\", () => pm.expect(list.every(i => i.vegetarian === false)).to.be.true);",
-                  "pm.test(\"Incluye C\", () => pm.expect(ids).to.include(v(\"ingCId\")));",
-                  "pm.test(\"No incluye A ni B\", () => pm.expect(ids).to.not.include.members([v(\"ingAId\"), v(\"ingBId\")]));"
+                  "pm.test(\"Incluye C\", () => pm.expect(ids).to.include(qaState.fx.ingCId));",
+                  "pm.test(\"No incluye A ni B\", () => pm.expect(ids).to.not.include.members([qaState.fx.ingAId, qaState.fx.ingBId]));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -877,32 +1117,39 @@
           }
         },
         {
-          "name": "Modificar ingrediente A (cost 1.50)",
+          "name": "Modificar ingrediente",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"newName\", tag + \" A modificado\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "",
-                  "",
-                  "const ingredientSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    cost: { type: \"number\" },",
-                  "    vegetarian: { type: \"boolean\" }",
-                  "  }",
-                  "};",
-                  "const i = pm.response.json();",
-                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
-                  "pm.test(\"Datos persistidos correctamente\", () => {",
-                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingAName\"));",
-                  "  pm.expect(i.cost).to.be.closeTo(1.5, 0.001);",
-                  "  pm.expect(i.vegetarian).to.eql(true);",
+                  "qa.expectIngredient(pm.response.json(), { name: qaState.fx.newName, cost: 1.6, vegetarian: false });",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/ingredients/\" + qa.fx.ingAId);",
+                  "  pm.test(\"El cambio queda persistido\", () => {",
+                  "    pm.expect(res.json().name).to.eql(qa.fx.newName);",
+                  "    pm.expect(res.json().cost).to.be.closeTo(1.6, 0.001);",
+                  "    pm.expect(res.json().vegetarian).to.eql(false);",
+                  "  });",
                   "});"
                 ]
               }
@@ -929,7 +1176,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"{{ingAName}}\",\n  \"cost\": 1.5,\n  \"vegetarian\": true\n}",
+              "raw": "{\n  \"name\": \"{{newName}}\",\n  \"cost\": 1.6,\n  \"vegetarian\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -939,39 +1186,264 @@
           }
         },
         {
-          "name": "Verificar modificación de A",
+          "name": "Borrar ingrediente",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "",
-                  "",
-                  "const ingredientSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    cost: { type: \"number\" },",
-                  "    vegetarian: { type: \"boolean\" }",
-                  "  }",
-                  "};",
-                  "const i = pm.response.json();",
-                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
-                  "pm.test(\"Datos persistidos correctamente\", () => {",
-                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingAName\"));",
-                  "  pm.expect(i.cost).to.be.closeTo(1.5, 0.001);",
-                  "  pm.expect(i.vegetarian).to.eql(true);",
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 200/204 (sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/ingredients/\" + qa.fx.ingAId);",
+                  "  pm.test(\"Ya no existe (404)\", () => pm.expect(res.code).to.eql(404));",
                   "});"
                 ]
               }
             }
           ],
           "request": {
-            "method": "GET",
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingAId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingAId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Borrar ingrediente usado en una pizza -> 4xx",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaId\", (await qa.createPizza(tag + \" Pizza\", [qa.fx.ingCId])).id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 4xx (rechazada)\", () => pm.expect(pm.response.code).to.be.within(400, 499));",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/ingredients/\" + qa.fx.ingCId);",
+                  "  pm.test(\"El ingrediente sigue existiendo\", () => pm.expect(res.code).to.eql(200));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingCId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente sin token -> 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" sin token\");",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"ingredients\");",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"cost\": 1,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Modificar ingrediente sin token -> 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/ingredients/\" + qa.fx.ingAId);",
+                  "  pm.test(\"El ingrediente no ha cambiado\", () => pm.expect(res.json().name).to.eql(qa.fx.tag + \" A\"));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingAId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingAId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"cambio no autorizado\",\n  \"cost\": 9,\n  \"vegetarian\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Borrar ingrediente sin token -> 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/ingredients/\" + qa.fx.ingAId);",
+                  "  pm.test(\"El ingrediente sigue existiendo\", () => pm.expect(res.code).to.eql(200));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/ingredients/{{ingAId}}",
@@ -990,14 +1462,29 @@
           }
         },
         {
-          "name": "Crear ingrediente sin token -> 401",
+          "name": "Crear ingrediente cost 0 (mínimo 0.01) -> 400",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" inválido\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"ingredients\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1022,52 +1509,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"QA sin token {{runId}}\",\n  \"cost\": 1,\n  \"vegetarian\": true\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        },
-        {
-          "name": "Crear ingrediente cost 0 -> 400",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"QA coste cero {{runId}}\",\n  \"cost\": 0,\n  \"vegetarian\": true\n}",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"cost\": 0,\n  \"vegetarian\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1077,14 +1519,29 @@
           }
         },
         {
-          "name": "Crear ingrediente cost 100.01 -> 400",
+          "name": "Crear ingrediente cost 100.01 (máximo 100) -> 400",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" inválido\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"ingredients\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1109,7 +1566,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"QA coste alto {{runId}}\",\n  \"cost\": 100.01,\n  \"vegetarian\": true\n}",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"cost\": 100.01,\n  \"vegetarian\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1122,11 +1579,26 @@
           "name": "Crear ingrediente sin name -> 400",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" inválido\");",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"ingredients\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1161,14 +1633,29 @@
           }
         },
         {
-          "name": "Crear ingrediente name > 60 caracteres -> 400",
+          "name": "Crear ingrediente name de 61 caracteres -> 400",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" inválido\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"ingredients\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1203,14 +1690,29 @@
           }
         },
         {
-          "name": "Crear ingrediente sin vegetarian -> 400",
+          "name": "Crear ingrediente sin cost -> 400",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" inválido\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"ingredients\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1235,7 +1737,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"QA sin vegetarian {{runId}}\",\n  \"cost\": 1\n}",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"vegetarian\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1245,34 +1747,59 @@
           }
         },
         {
-          "name": "Obtener ingrediente inexistente -> 404",
+          "name": "Crear ingrediente sin vegetarian -> 400",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" inválido\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"ingredients\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
           ],
           "request": {
-            "method": "GET",
-            "header": [],
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{baseUrl}}/api/ingredients/999999999",
+              "raw": "{{baseUrl}}/api/ingredients",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "ingredients",
-                "999999999"
+                "ingredients"
               ]
             },
-            "auth": {
-              "type": "noauth"
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"cost\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             }
           }
         }
@@ -1280,54 +1807,39 @@
     },
     {
       "name": "03 - Pizzas",
-      "description": "Pizzas construidas solo con los ingredientes propios: el precio esperado se conoce de antemano (A=1.50, B=0.75, C=2.00).",
+      "description": "Pizzas construidas con ingredientes propios de coste conocido: A=1.50 (veg), B=0.75 (veg), C=2.00 (no veg).",
       "item": [
         {
           "name": "Crear pizza vegetal (A+B) -> 2.70",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"name\", tag + \" Veg\");",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
-                  "",
-                  "",
-                  "const pizzaSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    vegetarian: { type: \"boolean\" },",
-                  "    ingredients: { type: \"array\", minItems: 1 },",
-                  "    ingredientsCost: { type: \"number\" },",
-                  "    profitMargin: { type: \"number\" },",
-                  "    price: { type: \"number\" }",
-                  "  }",
-                  "};",
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"pizzas\");",
+                  "pm.test(\"Status 200/201 (creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
                   "const p = pm.response.json();",
-                  "const v = (k) => pm.collectionVariables.get(k);",
-                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
-                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaVegName\")));",
-                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
-                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingBId\"))].sort((a, b) => a - b);",
-                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
-                  "});",
-                  "pm.test(\"ingredientsCost = suma de costes = 2.25\", () => {",
-                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(2.25, 0.001);",
-                  "});",
-                  "pm.test(\"price = ingredientsCost + 20 % = 2.70\", () => {",
-                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
-                  "  pm.expect(p.price).to.be.closeTo(2.70, 0.01);",
-                  "});",
-                  "pm.test(\"vegetarian = true (solo si todos sus ingredientes lo son)\", () => {",
-                  "  pm.expect(p.vegetarian).to.eql(true);",
-                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
-                  "});",
-                  "pm.collectionVariables.set(\"pizzaVegId\", pm.response.json().id);"
+                  "qa.expectPizza(p, { name: qaState.fx.name, ingredientIds: [qaState.fx.ingAId, qaState.fx.ingBId], cost: 2.25, vegetarian: true });",
+                  "pm.test(\"description persistida\", () => pm.expect(p.description).to.eql(\"Pizza de pruebas\"));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1352,7 +1864,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"{{pizzaVegName}}\",\n  \"description\": \"Pizza de pruebas vegetariana\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingBId}}\n  ]\n}",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"description\": \"Pizza de pruebas\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingBId}}\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1362,51 +1874,34 @@
           }
         },
         {
-          "name": "Crear pizza mixta (A+C) -> 4.20",
+          "name": "Crear pizza con un ingrediente no vegetariano (A+C) -> 4.20",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"name\", tag + \" Mix\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
-                  "",
-                  "",
-                  "const pizzaSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    vegetarian: { type: \"boolean\" },",
-                  "    ingredients: { type: \"array\", minItems: 1 },",
-                  "    ingredientsCost: { type: \"number\" },",
-                  "    profitMargin: { type: \"number\" },",
-                  "    price: { type: \"number\" }",
-                  "  }",
-                  "};",
-                  "const p = pm.response.json();",
-                  "const v = (k) => pm.collectionVariables.get(k);",
-                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
-                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaMixName\")));",
-                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
-                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingCId\"))].sort((a, b) => a - b);",
-                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
-                  "});",
-                  "pm.test(\"ingredientsCost = suma de costes = 3.5\", () => {",
-                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(3.5, 0.001);",
-                  "});",
-                  "pm.test(\"price = ingredientsCost + 20 % = 4.20\", () => {",
-                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
-                  "  pm.expect(p.price).to.be.closeTo(4.20, 0.01);",
-                  "});",
-                  "pm.test(\"vegetarian = false (solo si todos sus ingredientes lo son)\", () => {",
-                  "  pm.expect(p.vegetarian).to.eql(false);",
-                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
-                  "});",
-                  "pm.collectionVariables.set(\"pizzaMixId\", pm.response.json().id);"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"pizzas\");",
+                  "pm.test(\"Status 200/201 (creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "qa.expectPizza(pm.response.json(), { name: qaState.fx.name, ingredientIds: [qaState.fx.ingAId, qaState.fx.ingCId], cost: 3.5, vegetarian: false });",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1431,7 +1926,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"{{pizzaMixName}}\",\n  \"description\": \"Pizza de pruebas no vegetariana\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingCId}}\n  ]\n}",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingCId}}\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1441,51 +1936,37 @@
           }
         },
         {
-          "name": "Obtener pizza vegetal por id",
+          "name": "Obtener pizza por id",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "",
-                  "",
-                  "const pizzaSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    vegetarian: { type: \"boolean\" },",
-                  "    ingredients: { type: \"array\", minItems: 1 },",
-                  "    ingredientsCost: { type: \"number\" },",
-                  "    profitMargin: { type: \"number\" },",
-                  "    price: { type: \"number\" }",
-                  "  }",
-                  "};",
                   "const p = pm.response.json();",
-                  "const v = (k) => pm.collectionVariables.get(k);",
-                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
-                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaVegName\")));",
-                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
-                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingBId\"))].sort((a, b) => a - b);",
-                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
-                  "});",
-                  "pm.test(\"ingredientsCost = suma de costes = 2.25\", () => {",
-                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(2.25, 0.001);",
-                  "});",
-                  "pm.test(\"price = ingredientsCost + 20 % = 2.70\", () => {",
-                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
-                  "  pm.expect(p.price).to.be.closeTo(2.70, 0.01);",
-                  "});",
-                  "pm.test(\"vegetarian = true (solo si todos sus ingredientes lo son)\", () => {",
-                  "  pm.expect(p.vegetarian).to.eql(true);",
-                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
-                  "});",
-                  "pm.test(\"description persistida\", () => pm.expect(p.description).to.eql(\"Pizza de pruebas vegetariana\"));"
+                  "qa.expectPizza(p, { name: qaState.fx.tag + \" Veg\", ingredientIds: [qaState.fx.ingAId, qaState.fx.ingBId], cost: 2.25, vegetarian: true });",
+                  "pm.test(\"description persistida\", () => pm.expect(p.description).to.eql(\"Vegetal\"));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1510,21 +1991,85 @@
           }
         },
         {
-          "name": "Listar pizzas (público)",
+          "name": "Obtener pizza inexistente -> 404",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"missingId\", await qa.deletedId(\"pizzas\"));",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{missingId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{missingId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Listar pizzas",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
                   "const list = pm.response.json();",
-                  "const v = (k) => Number(pm.collectionVariables.get(k));",
-                  "pm.test(\"Es un array\", () => pm.expect(list).to.be.an(\"array\"));",
-                  "pm.test(\"Incluye las dos pizzas creadas\", () => pm.expect(list.map(p => p.id)).to.include.members([v(\"pizzaVegId\"), v(\"pizzaMixId\")]));",
+                  "pm.test(\"Incluye las pizzas creadas\", () => pm.expect(list.map(p => p.id)).to.include.members([qaState.fx.pizzaVegId, qaState.fx.pizzaMixId]));",
                   "pm.test(\"Todas cumplen price = ingredientsCost + 20 %\", () => {",
                   "  list.forEach(p => pm.expect(p.price, p.name).to.be.closeTo(p.ingredientsCost * 1.2, 0.01));",
-                  "});"
+                  "});",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1548,19 +2093,35 @@
           }
         },
         {
-          "name": "Filtrar por name (único de la ejecución)",
+          "name": "Filtrar por name",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "const list = pm.response.json();",
-                  "pm.test(\"Devuelve exactamente la pizza vegetal\", () => {",
-                  "  pm.expect(list).to.have.lengthOf(1);",
-                  "  pm.expect(list[0].id).to.eql(Number(pm.collectionVariables.get(\"pizzaVegId\")));",
-                  "});"
+                  "pm.test(\"Devuelve solo la pizza buscada\", () => pm.expect(pm.response.json().map(p => p.id)).to.eql([qaState.fx.pizzaVegId]));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1569,7 +2130,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/pizzas?name={{pizzaVegName}}",
+              "raw": "{{baseUrl}}/api/pizzas?name={{tag}} Veg",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1580,7 +2141,7 @@
               "query": [
                 {
                   "key": "name",
-                  "value": "{{pizzaVegName}}"
+                  "value": "{{tag}} Veg"
                 }
               ]
             },
@@ -1590,19 +2151,28 @@
           }
         },
         {
-          "name": "Filtrar por runId + vegetarian=true",
+          "name": "Filtrar por name sin coincidencias -> []",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  qa.set(\"tag\", \"QA\" + qa.uid() + \" inexistente\");",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "const list = pm.response.json();",
-                  "pm.test(\"Solo la pizza vegetal de esta ejecución\", () => {",
-                  "  pm.expect(list.map(p => p.id)).to.eql([Number(pm.collectionVariables.get(\"pizzaVegId\"))]);",
-                  "});",
-                  "pm.test(\"Todas son vegetarianas\", () => pm.expect(list.every(p => p.vegetarian)).to.be.true);"
+                  "pm.test(\"Lista vacía\", () => pm.expect(pm.response.json()).to.be.an(\"array\").that.is.empty);",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1611,7 +2181,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/pizzas?name={{runId}}&vegetarian=true",
+              "raw": "{{baseUrl}}/api/pizzas?name={{tag}}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1622,7 +2192,67 @@
               "query": [
                 {
                   "key": "name",
-                  "value": "{{runId}}"
+                  "value": "{{tag}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Filtrar por vegetarian=true",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "pm.test(\"Solo la pizza vegetal\", () => pm.expect(list.map(p => p.id)).to.eql([qaState.fx.pizzaVegId]));",
+                  "pm.test(\"Todas son vegetarianas\", () => pm.expect(list.every(p => p.vegetarian)).to.be.true);",
+                  "qa.finish();"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas?name={{tag}}&vegetarian=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "{{tag}}"
                 },
                 {
                   "key": "vegetarian",
@@ -1636,18 +2266,35 @@
           }
         },
         {
-          "name": "Filtrar por runId + vegetarian=false",
+          "name": "Filtrar por vegetarian=false",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "const list = pm.response.json();",
-                  "pm.test(\"Solo la pizza mixta de esta ejecución\", () => {",
-                  "  pm.expect(list.map(p => p.id)).to.eql([Number(pm.collectionVariables.get(\"pizzaMixId\"))]);",
-                  "});"
+                  "pm.test(\"Solo la pizza mixta\", () => pm.expect(pm.response.json().map(p => p.id)).to.eql([qaState.fx.pizzaMixId]));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1656,7 +2303,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/pizzas?name={{runId}}&vegetarian=false",
+              "raw": "{{baseUrl}}/api/pizzas?name={{tag}}&vegetarian=false",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1667,7 +2314,7 @@
               "query": [
                 {
                   "key": "name",
-                  "value": "{{runId}}"
+                  "value": "{{tag}}"
                 },
                 {
                   "key": "vegetarian",
@@ -1681,19 +2328,37 @@
           }
         },
         {
-          "name": "Filtrar por runId + maxPrice=3",
+          "name": "Filtrar por maxPrice=3",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
                   "const list = pm.response.json();",
-                  "pm.test(\"Solo la pizza vegetal (2.70 <= 3; la mixta cuesta 4.20)\", () => {",
-                  "  pm.expect(list.map(p => p.id)).to.eql([Number(pm.collectionVariables.get(\"pizzaVegId\"))]);",
-                  "});",
-                  "pm.test(\"Ningún precio supera maxPrice\", () => pm.expect(list.every(p => p.price <= 3)).to.be.true);"
+                  "pm.test(\"Solo la vegetal (2.70); la mixta cuesta 4.20\", () => pm.expect(list.map(p => p.id)).to.eql([qaState.fx.pizzaVegId]));",
+                  "pm.test(\"Ningún precio supera maxPrice\", () => pm.expect(list.every(p => p.price <= 3)).to.be.true);",
+                  "qa.finish();"
                 ]
               }
             }
@@ -1702,7 +2367,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/pizzas?name={{runId}}&maxPrice=3",
+              "raw": "{{baseUrl}}/api/pizzas?name={{tag}}&maxPrice=3",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1713,7 +2378,7 @@
               "query": [
                 {
                   "key": "name",
-                  "value": "{{runId}}"
+                  "value": "{{tag}}"
                 },
                 {
                   "key": "maxPrice",
@@ -1727,87 +2392,38 @@
           }
         },
         {
-          "name": "Filtrar por name inexistente -> lista vacía",
+          "name": "Modificar pizza (A+B+C) -> 5.10, deja de ser vegetariana",
           "event": [
             {
-              "listen": "test",
+              "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Lista vacía\", () => pm.expect(pm.response.json()).to.be.an(\"array\").that.is.empty);"
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "  qa.set(\"newName\", tag + \" Veg modificada\");",
+                  "});"
                 ]
               }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/pizzas?name=no-existe-{{runId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "pizzas"
-              ],
-              "query": [
-                {
-                  "key": "name",
-                  "value": "no-existe-{{runId}}"
-                }
-              ]
             },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        },
-        {
-          "name": "Modificar pizza vegetal (A+B+C) -> 5.10, deja de ser veg",
-          "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "",
-                  "",
-                  "const pizzaSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    vegetarian: { type: \"boolean\" },",
-                  "    ingredients: { type: \"array\", minItems: 1 },",
-                  "    ingredientsCost: { type: \"number\" },",
-                  "    profitMargin: { type: \"number\" },",
-                  "    price: { type: \"number\" }",
-                  "  }",
-                  "};",
-                  "const p = pm.response.json();",
-                  "const v = (k) => pm.collectionVariables.get(k);",
-                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
-                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaVegName\")));",
-                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
-                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingBId\")), Number(v(\"ingCId\"))].sort((a, b) => a - b);",
-                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
-                  "});",
-                  "pm.test(\"ingredientsCost = suma de costes = 4.25\", () => {",
-                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(4.25, 0.001);",
-                  "});",
-                  "pm.test(\"price = ingredientsCost + 20 % = 5.10\", () => {",
-                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
-                  "  pm.expect(p.price).to.be.closeTo(5.10, 0.01);",
-                  "});",
-                  "pm.test(\"vegetarian = false (solo si todos sus ingredientes lo son)\", () => {",
-                  "  pm.expect(p.vegetarian).to.eql(false);",
-                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
+                  "qa.expectPizza(pm.response.json(), { name: qaState.fx.newName, ingredientIds: [qaState.fx.ingAId, qaState.fx.ingBId, qaState.fx.ingCId], cost: 4.25, vegetarian: false });",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/pizzas/\" + qa.fx.pizzaVegId);",
+                  "  pm.test(\"El cambio queda persistido\", () => pm.expect(res.json().ingredients).to.have.lengthOf(3));",
                   "});"
                 ]
               }
@@ -1834,7 +2450,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"{{pizzaVegName}}\",\n  \"description\": \"Ahora lleva C\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingBId}},\n    {{ingCId}}\n  ]\n}",
+              "raw": "{\n  \"name\": \"{{newName}}\",\n  \"description\": \"Ahora lleva C\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingBId}},\n    {{ingCId}}\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1844,32 +2460,36 @@
           }
         },
         {
-          "name": "Modificar coste de C (2.50)",
+          "name": "Cambiar el coste de un ingrediente recalcula la pizza -> 4.80",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const qa = qaLib(pm);",
                   "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "",
-                  "",
-                  "const ingredientSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    cost: { type: \"number\" },",
-                  "    vegetarian: { type: \"boolean\" }",
-                  "  }",
-                  "};",
-                  "const i = pm.response.json();",
-                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
-                  "pm.test(\"Datos persistidos correctamente\", () => {",
-                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingCName\"));",
-                  "  pm.expect(i.cost).to.be.closeTo(2.5, 0.001);",
-                  "  pm.expect(i.vegetarian).to.eql(false);",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/pizzas/\" + qa.fx.pizzaMixId);",
+                  "  qa.expectPizza(res.json(), { name: qa.fx.tag + \" Mix\", ingredientIds: [qa.fx.ingAId, qa.fx.ingCId], cost: 4.0, vegetarian: false });",
                   "});"
                 ]
               }
@@ -1896,7 +2516,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"{{ingCName}}\",\n  \"cost\": 2.5,\n  \"vegetarian\": false\n}",
+              "raw": "{\n  \"name\": \"{{tag}} C\",\n  \"cost\": 2.5,\n  \"vegetarian\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1906,70 +2526,56 @@
           }
         },
         {
-          "name": "El precio de la pizza mixta se recalcula -> 4.80",
+          "name": "Borrar pizza",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "",
-                  "",
-                  "const pizzaSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    vegetarian: { type: \"boolean\" },",
-                  "    ingredients: { type: \"array\", minItems: 1 },",
-                  "    ingredientsCost: { type: \"number\" },",
-                  "    profitMargin: { type: \"number\" },",
-                  "    price: { type: \"number\" }",
-                  "  }",
-                  "};",
-                  "const p = pm.response.json();",
-                  "const v = (k) => pm.collectionVariables.get(k);",
-                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
-                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaMixName\")));",
-                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
-                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingCId\"))].sort((a, b) => a - b);",
-                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
-                  "});",
-                  "pm.test(\"ingredientsCost = suma de costes = 4\", () => {",
-                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
-                  "  pm.expect(p.ingredientsCost).to.be.closeTo(4, 0.001);",
-                  "});",
-                  "pm.test(\"price = ingredientsCost + 20 % = 4.80\", () => {",
-                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
-                  "  pm.expect(p.price).to.be.closeTo(4.80, 0.01);",
-                  "});",
-                  "pm.test(\"vegetarian = false (solo si todos sus ingredientes lo son)\", () => {",
-                  "  pm.expect(p.vegetarian).to.eql(false);",
-                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 200/204 (sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/pizzas/\" + qa.fx.pizzaVegId);",
+                  "  pm.test(\"Ya no existe (404)\", () => pm.expect(res.code).to.eql(404));",
+                  "  const ing = await qa.send(\"GET\", \"/api/ingredients/\" + qa.fx.ingAId);",
+                  "  pm.test(\"Sus ingredientes siguen existiendo\", () => pm.expect(ing.code).to.eql(200));",
                   "});"
                 ]
               }
             }
           ],
           "request": {
-            "method": "GET",
+            "method": "DELETE",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/pizzas/{{pizzaMixId}}",
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
                 "pizzas",
-                "{{pizzaMixId}}"
+                "{{pizzaVegId}}"
               ]
-            },
-            "auth": {
-              "type": "noauth"
             }
           }
         },
@@ -1977,11 +2583,29 @@
           "name": "Crear pizza sin token -> 401",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"pizzas\");",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -2006,12 +2630,136 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"QA sin token {{runId}}\",\n  \"ingredientIds\": [\n    {{ingAId}}\n  ]\n}",
+              "raw": "{\n  \"name\": \"{{tag}} sin token\",\n  \"ingredientIds\": [\n    {{ingAId}}\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
                 }
               }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Modificar pizza sin token -> 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/pizzas/\" + qa.fx.pizzaVegId);",
+                  "  pm.test(\"La pizza no ha cambiado\", () => pm.expect(res.json().name).to.eql(qa.fx.tag + \" Veg\"));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaVegId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"cambio no autorizado\",\n  \"ingredientIds\": [\n    {{ingCId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Borrar pizza sin token -> 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "  qa.set(\"pizzaVegId\", (await qa.createPizza(tag + \" Veg\", [qa.fx.ingAId, qa.fx.ingBId], \"Vegetal\")).id);",
+                  "  qa.set(\"pizzaMixId\", (await qa.createPizza(tag + \" Mix\", [qa.fx.ingAId, qa.fx.ingCId], \"Mixta\")).id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const qa = qaLib(pm);",
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "qa.finish(async (qa) => {",
+                  "  const res = await qa.send(\"GET\", \"/api/pizzas/\" + qa.fx.pizzaVegId);",
+                  "  pm.test(\"La pizza sigue existiendo\", () => pm.expect(res.code).to.eql(200));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaVegId}}"
+              ]
             },
             "auth": {
               "type": "noauth"
@@ -2022,11 +2770,26 @@
           "name": "Crear pizza sin ingredientes -> 400",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" vacía\");",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"pizzas\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -2051,7 +2814,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"QA sin ingredientes {{runId}}\",\n  \"ingredientIds\": []\n}",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"ingredientIds\": []\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2064,11 +2827,29 @@
           "name": "Crear pizza sin name -> 400",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"pizzas\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -2103,14 +2884,32 @@
           }
         },
         {
-          "name": "Crear pizza con ingrediente inexistente -> 4xx",
+          "name": "Crear pizza con name de 61 caracteres -> 400",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  const tag = qa.set(\"tag\", \"QA\" + qa.uid());",
+                  "  qa.set(\"ingAId\", (await qa.createIngredient(tag + \" A\", 1.5, true)).id);",
+                  "  qa.set(\"ingBId\", (await qa.createIngredient(tag + \" B\", 0.75, true)).id);",
+                  "  qa.set(\"ingCId\", (await qa.createIngredient(tag + \" C\", 2.0, false)).id);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 4xx (petición rechazada)\", () => pm.expect(pm.response.code).to.be.within(400, 499));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"pizzas\");",
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "qa.finish();"
                 ]
               }
             }
@@ -2135,7 +2934,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"QA ingrediente fantasma {{runId}}\",\n  \"ingredientIds\": [\n    999999999\n  ]\n}",
+              "raw": "{\n  \"name\": \"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\",\n  \"ingredientIds\": [\n    {{ingAId}}\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2145,459 +2944,60 @@
           }
         },
         {
-          "name": "Obtener pizza inexistente -> 404",
+          "name": "Crear pizza con un ingrediente inexistente -> 4xx",
           "event": [
             {
-              "listen": "test",
+              "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/pizzas/999999999",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "pizzas",
-                "999999999"
-              ]
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        },
-        {
-          "name": "Borrar ingrediente en uso (C) -> 4xx",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 4xx (petición rechazada)\", () => pm.expect(pm.response.code).to.be.within(400, 499));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients",
-                "{{ingCId}}"
-              ]
-            }
-          }
-        },
-        {
-          "name": "El ingrediente en uso sigue existiendo",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "",
-                  "",
-                  "const ingredientSchema = {",
-                  "  type: \"object\",",
-                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
-                  "  properties: {",
-                  "    id: { type: \"integer\" },",
-                  "    name: { type: \"string\" },",
-                  "    cost: { type: \"number\" },",
-                  "    vegetarian: { type: \"boolean\" }",
-                  "  }",
-                  "};",
-                  "const i = pm.response.json();",
-                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
-                  "pm.test(\"Datos persistidos correctamente\", () => {",
-                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingCName\"));",
-                  "  pm.expect(i.cost).to.be.closeTo(2.5, 0.001);",
-                  "  pm.expect(i.vegetarian).to.eql(false);",
+                  "qaLib(pm).arrange(async (qa) => {",
+                  "  await qa.login();",
+                  "  qa.set(\"name\", \"QA\" + qa.uid() + \" fantasma\");",
+                  "  qa.set(\"missingId\", await qa.deletedId(\"ingredients\"));",
                   "});"
                 ]
               }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients",
-                "{{ingCId}}"
-              ]
             },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        },
-        {
-          "name": "Borrar pizza sin token -> 401",
-          "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/pizzas/{{pizzaMixId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "pizzas",
-                "{{pizzaMixId}}"
-              ]
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "name": "99 - Teardown",
-      "description": "Borra todo lo creado y cierra la sesión, dejando la base de datos como estaba.",
-      "item": [
-        {
-          "name": "Borrar pizza vegetal",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "pizzas",
-                "{{pizzaVegId}}"
-              ]
-            }
-          }
-        },
-        {
-          "name": "Borrar pizza mixta",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/pizzas/{{pizzaMixId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "pizzas",
-                "{{pizzaMixId}}"
-              ]
-            }
-          }
-        },
-        {
-          "name": "Pizza borrada -> 404",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "pizzas",
-                "{{pizzaVegId}}"
-              ]
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        },
-        {
-          "name": "Borrar ingrediente A",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients/{{ingAId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients",
-                "{{ingAId}}"
-              ]
-            }
-          }
-        },
-        {
-          "name": "Borrar ingrediente B",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients/{{ingBId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients",
-                "{{ingBId}}"
-              ]
-            }
-          }
-        },
-        {
-          "name": "Borrar ingrediente C (ya no está en uso)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients",
-                "{{ingCId}}"
-              ]
-            }
-          }
-        },
-        {
-          "name": "Ingrediente borrado -> 404",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "ingredients",
-                "{{ingCId}}"
-              ]
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        },
-        {
-          "name": "No queda ninguna pizza de esta ejecución",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Lista vacía\", () => pm.expect(pm.response.json()).to.be.an(\"array\").that.is.empty);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/pizzas?name={{runId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "pizzas"
-              ],
-              "query": [
-                {
-                  "key": "name",
-                  "value": "{{runId}}"
-                }
-              ]
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          }
-        },
-        {
-          "name": "Logout",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
+                  "const qa = qaLib(pm);",
+                  "qa.trackResponse(\"pizzas\");",
+                  "pm.test(\"Status 4xx (rechazada)\", () => pm.expect(pm.response.code).to.be.within(400, 499));",
+                  "qa.finish();"
                 ]
               }
             }
           ],
           "request": {
             "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/logout",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "logout"
-              ]
-            }
-          }
-        },
-        {
-          "name": "Token invalidado tras logout -> 401",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
-                  "[\"accessToken\", \"refreshToken\", \"ingAId\", \"ingBId\", \"ingCId\", \"pizzaVegId\", \"pizzaMixId\"]",
-                  "  .forEach(k => pm.collectionVariables.unset(k));"
-                ]
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
               }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
+            ],
             "url": {
-              "raw": "{{baseUrl}}/api/auth/me",
+              "raw": "{{baseUrl}}/api/pizzas",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "auth",
-                "me"
+                "pizzas"
               ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{name}}\",\n  \"ingredientIds\": [\n    {{missingId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             }
           }
         }
