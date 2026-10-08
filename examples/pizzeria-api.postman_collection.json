@@ -1,0 +1,2607 @@
+{
+  "info": {
+    "name": "Pizzería API - Tests deterministas",
+    "description": "Colección generada a partir de la especificación OpenAPI (/v3/api-docs).\n\nDeterminismo:\n- Cada ejecución crea sus propios ingredientes y pizzas con un sufijo único (runId) y los borra al final.\n- Los precios esperados se calculan a partir de costes conocidos: precio = suma de costes + 20 %.\n- Los listados nunca se comparan contra datos semilla: se verifica inclusión/exclusión de los datos propios.\n- No hay asserts de tiempo de respuesta ni dependencias del orden de los datos existentes.\n\nEjecutar la colección completa y en orden (Collection Runner o newman) con el environment pizzeria-dev.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Comprobación común: toda respuesta con cuerpo debe ser JSON válido",
+          "if (pm.response.text().length > 0 && pm.response.code === 200) {",
+          "  pm.test(\"[común] El cuerpo es JSON válido\", () => pm.response.json());",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "runId",
+      "value": ""
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "refreshToken",
+      "value": ""
+    },
+    {
+      "key": "ingAName",
+      "value": ""
+    },
+    {
+      "key": "ingBName",
+      "value": ""
+    },
+    {
+      "key": "ingCName",
+      "value": ""
+    },
+    {
+      "key": "ingAId",
+      "value": ""
+    },
+    {
+      "key": "ingBId",
+      "value": ""
+    },
+    {
+      "key": "ingCId",
+      "value": ""
+    },
+    {
+      "key": "pizzaVegName",
+      "value": ""
+    },
+    {
+      "key": "pizzaMixName",
+      "value": ""
+    },
+    {
+      "key": "pizzaVegId",
+      "value": ""
+    },
+    {
+      "key": "pizzaMixId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "00 - Setup",
+      "description": "Genera un identificador único de ejecución y obtiene los tokens. Los datos de prueba se crean desde cero, por lo que los tests no dependen del estado previo de la base de datos.",
+      "item": [
+        {
+          "name": "Login (admin)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sufijo único por ejecución: evita colisiones con datos de ejecuciones anteriores",
+                  "const runId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);",
+                  "pm.collectionVariables.set(\"runId\", runId);",
+                  "pm.collectionVariables.set(\"ingAName\", \"QA Ing A \" + runId);",
+                  "pm.collectionVariables.set(\"ingBName\", \"QA Ing B \" + runId);",
+                  "pm.collectionVariables.set(\"ingCName\", \"QA Ing C \" + runId);",
+                  "pm.collectionVariables.set(\"pizzaVegName\", \"QA Veg \" + runId);",
+                  "pm.collectionVariables.set(\"pizzaMixName\", \"QA Mix \" + runId);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "const tokenSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"accessToken\", \"refreshToken\", \"tokenType\", \"expiresIn\"],",
+                  "  properties: {",
+                  "    accessToken: { type: \"string\", minLength: 1 },",
+                  "    refreshToken: { type: \"string\", minLength: 1 },",
+                  "    tokenType: { type: \"string\" },",
+                  "    expiresIn: { type: \"integer\", minimum: 1 }",
+                  "  }",
+                  "};",
+                  "const t = pm.response.json();",
+                  "pm.test(\"Cumple el esquema TokenResponse\", () => pm.response.to.have.jsonSchema(tokenSchema));",
+                  "pm.test(\"tokenType es Bearer\", () => pm.expect(t.tokenType.toLowerCase()).to.eql(\"bearer\"));",
+                  "pm.test(\"accessToken y refreshToken son distintos\", () => pm.expect(t.accessToken).to.not.eql(t.refreshToken));",
+                  "pm.collectionVariables.set(\"accessToken\", t.accessToken);",
+                  "pm.collectionVariables.set(\"refreshToken\", t.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 - Autenticación",
+      "description": "Login, usuario actual, refresh y casos negativos.",
+      "item": [
+        {
+          "name": "Me - usuario del token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const u = pm.response.json();",
+                  "pm.test(\"username coincide con el del login\", () => pm.expect(u.username).to.eql(pm.environment.get(\"username\")));",
+                  "pm.test(\"expiresIn es un entero positivo\", () => {",
+                  "  pm.expect(u.expiresIn).to.be.a(\"number\");",
+                  "  pm.expect(u.expiresIn).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Me - sin token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Me - token inventado -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "token-que-no-existe",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login - contraseña incorrecta -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"No devuelve tokens\", () => pm.expect(pm.response.text()).to.not.include(\"accessToken\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"contraseña-incorrecta\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Login - sin password -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Refresh - canjea el refresh token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "const tokenSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"accessToken\", \"refreshToken\", \"tokenType\", \"expiresIn\"],",
+                  "  properties: {",
+                  "    accessToken: { type: \"string\", minLength: 1 },",
+                  "    refreshToken: { type: \"string\", minLength: 1 },",
+                  "    tokenType: { type: \"string\" },",
+                  "    expiresIn: { type: \"integer\", minimum: 1 }",
+                  "  }",
+                  "};",
+                  "const t = pm.response.json();",
+                  "pm.test(\"Cumple el esquema TokenResponse\", () => pm.response.to.have.jsonSchema(tokenSchema));",
+                  "pm.test(\"Devuelve un access token nuevo\", () => pm.expect(t.accessToken).to.not.eql(pm.collectionVariables.get(\"accessToken\")));",
+                  "pm.collectionVariables.set(\"accessToken\", t.accessToken);",
+                  "pm.collectionVariables.set(\"refreshToken\", t.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Me - con el token refrescado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"username coincide\", () => pm.expect(pm.response.json().username).to.eql(pm.environment.get(\"username\")));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Refresh - token inválido -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"refresh-token-inventado\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Ingredientes",
+      "description": "Crea tres ingredientes propios (A y B vegetarianos, C no vegetariano) con costes conocidos.",
+      "item": [
+        {
+          "name": "Crear ingrediente A (veg, 1.25)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "",
+                  "",
+                  "const ingredientSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    cost: { type: \"number\" },",
+                  "    vegetarian: { type: \"boolean\" }",
+                  "  }",
+                  "};",
+                  "const i = pm.response.json();",
+                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
+                  "pm.test(\"Datos persistidos correctamente\", () => {",
+                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingAName\"));",
+                  "  pm.expect(i.cost).to.be.closeTo(1.25, 0.001);",
+                  "  pm.expect(i.vegetarian).to.eql(true);",
+                  "});",
+                  "pm.collectionVariables.set(\"ingAId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{ingAName}}\",\n  \"cost\": 1.25,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente B (veg, 0.75)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "",
+                  "",
+                  "const ingredientSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    cost: { type: \"number\" },",
+                  "    vegetarian: { type: \"boolean\" }",
+                  "  }",
+                  "};",
+                  "const i = pm.response.json();",
+                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
+                  "pm.test(\"Datos persistidos correctamente\", () => {",
+                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingBName\"));",
+                  "  pm.expect(i.cost).to.be.closeTo(0.75, 0.001);",
+                  "  pm.expect(i.vegetarian).to.eql(true);",
+                  "});",
+                  "pm.collectionVariables.set(\"ingBId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{ingBName}}\",\n  \"cost\": 0.75,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente C (no veg, 2.00)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "",
+                  "",
+                  "const ingredientSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    cost: { type: \"number\" },",
+                  "    vegetarian: { type: \"boolean\" }",
+                  "  }",
+                  "};",
+                  "const i = pm.response.json();",
+                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
+                  "pm.test(\"Datos persistidos correctamente\", () => {",
+                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingCName\"));",
+                  "  pm.expect(i.cost).to.be.closeTo(2, 0.001);",
+                  "  pm.expect(i.vegetarian).to.eql(false);",
+                  "});",
+                  "pm.collectionVariables.set(\"ingCId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{ingCName}}\",\n  \"cost\": 2,\n  \"vegetarian\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Obtener ingrediente A por id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "",
+                  "const ingredientSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    cost: { type: \"number\" },",
+                  "    vegetarian: { type: \"boolean\" }",
+                  "  }",
+                  "};",
+                  "const i = pm.response.json();",
+                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
+                  "pm.test(\"Datos persistidos correctamente\", () => {",
+                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingAName\"));",
+                  "  pm.expect(i.cost).to.be.closeTo(1.25, 0.001);",
+                  "  pm.expect(i.vegetarian).to.eql(true);",
+                  "});",
+                  "pm.test(\"id coincide\", () => pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"ingAId\"))));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingAId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingAId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Listar ingredientes (público)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "const ids = list.map(i => i.id);",
+                  "const v = (k) => Number(pm.collectionVariables.get(k));",
+                  "pm.test(\"Es un array\", () => pm.expect(list).to.be.an(\"array\"));",
+                  "pm.test(\"Incluye los tres ingredientes creados\", () => pm.expect(ids).to.include.members([v(\"ingAId\"), v(\"ingBId\"), v(\"ingCId\")]));",
+                  "pm.test(\"No hay ids duplicados\", () => pm.expect(new Set(ids).size).to.eql(ids.length));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Listar ingredientes vegetarian=true",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "const ids = list.map(i => i.id);",
+                  "const v = (k) => Number(pm.collectionVariables.get(k));",
+                  "pm.test(\"Todos son vegetarianos\", () => pm.expect(list.every(i => i.vegetarian === true)).to.be.true);",
+                  "pm.test(\"Incluye A y B\", () => pm.expect(ids).to.include.members([v(\"ingAId\"), v(\"ingBId\")]));",
+                  "pm.test(\"No incluye C\", () => pm.expect(ids).to.not.include(v(\"ingCId\")));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients?vegetarian=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ],
+              "query": [
+                {
+                  "key": "vegetarian",
+                  "value": "true"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Listar ingredientes vegetarian=false",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "const ids = list.map(i => i.id);",
+                  "const v = (k) => Number(pm.collectionVariables.get(k));",
+                  "pm.test(\"Ninguno es vegetariano\", () => pm.expect(list.every(i => i.vegetarian === false)).to.be.true);",
+                  "pm.test(\"Incluye C\", () => pm.expect(ids).to.include(v(\"ingCId\")));",
+                  "pm.test(\"No incluye A ni B\", () => pm.expect(ids).to.not.include.members([v(\"ingAId\"), v(\"ingBId\")]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients?vegetarian=false",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ],
+              "query": [
+                {
+                  "key": "vegetarian",
+                  "value": "false"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Modificar ingrediente A (cost 1.50)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "",
+                  "const ingredientSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    cost: { type: \"number\" },",
+                  "    vegetarian: { type: \"boolean\" }",
+                  "  }",
+                  "};",
+                  "const i = pm.response.json();",
+                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
+                  "pm.test(\"Datos persistidos correctamente\", () => {",
+                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingAName\"));",
+                  "  pm.expect(i.cost).to.be.closeTo(1.5, 0.001);",
+                  "  pm.expect(i.vegetarian).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingAId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingAId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{ingAName}}\",\n  \"cost\": 1.5,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Verificar modificación de A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "",
+                  "const ingredientSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    cost: { type: \"number\" },",
+                  "    vegetarian: { type: \"boolean\" }",
+                  "  }",
+                  "};",
+                  "const i = pm.response.json();",
+                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
+                  "pm.test(\"Datos persistidos correctamente\", () => {",
+                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingAName\"));",
+                  "  pm.expect(i.cost).to.be.closeTo(1.5, 0.001);",
+                  "  pm.expect(i.vegetarian).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingAId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingAId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente sin token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA sin token {{runId}}\",\n  \"cost\": 1,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente cost 0 -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA coste cero {{runId}}\",\n  \"cost\": 0,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente cost 100.01 -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA coste alto {{runId}}\",\n  \"cost\": 100.01,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente sin name -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cost\": 1,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente name > 60 caracteres -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\",\n  \"cost\": 1,\n  \"vegetarian\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear ingrediente sin vegetarian -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA sin vegetarian {{runId}}\",\n  \"cost\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Obtener ingrediente inexistente -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/999999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "999999999"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Pizzas",
+      "description": "Pizzas construidas solo con los ingredientes propios: el precio esperado se conoce de antemano (A=1.50, B=0.75, C=2.00).",
+      "item": [
+        {
+          "name": "Crear pizza vegetal (A+B) -> 2.70",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "",
+                  "",
+                  "const pizzaSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    vegetarian: { type: \"boolean\" },",
+                  "    ingredients: { type: \"array\", minItems: 1 },",
+                  "    ingredientsCost: { type: \"number\" },",
+                  "    profitMargin: { type: \"number\" },",
+                  "    price: { type: \"number\" }",
+                  "  }",
+                  "};",
+                  "const p = pm.response.json();",
+                  "const v = (k) => pm.collectionVariables.get(k);",
+                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
+                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaVegName\")));",
+                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
+                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingBId\"))].sort((a, b) => a - b);",
+                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
+                  "});",
+                  "pm.test(\"ingredientsCost = suma de costes = 2.25\", () => {",
+                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(2.25, 0.001);",
+                  "});",
+                  "pm.test(\"price = ingredientsCost + 20 % = 2.70\", () => {",
+                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
+                  "  pm.expect(p.price).to.be.closeTo(2.70, 0.01);",
+                  "});",
+                  "pm.test(\"vegetarian = true (solo si todos sus ingredientes lo son)\", () => {",
+                  "  pm.expect(p.vegetarian).to.eql(true);",
+                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
+                  "});",
+                  "pm.collectionVariables.set(\"pizzaVegId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{pizzaVegName}}\",\n  \"description\": \"Pizza de pruebas vegetariana\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingBId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear pizza mixta (A+C) -> 4.20",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/201 (recurso creado)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "",
+                  "",
+                  "const pizzaSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    vegetarian: { type: \"boolean\" },",
+                  "    ingredients: { type: \"array\", minItems: 1 },",
+                  "    ingredientsCost: { type: \"number\" },",
+                  "    profitMargin: { type: \"number\" },",
+                  "    price: { type: \"number\" }",
+                  "  }",
+                  "};",
+                  "const p = pm.response.json();",
+                  "const v = (k) => pm.collectionVariables.get(k);",
+                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
+                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaMixName\")));",
+                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
+                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingCId\"))].sort((a, b) => a - b);",
+                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
+                  "});",
+                  "pm.test(\"ingredientsCost = suma de costes = 3.5\", () => {",
+                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(3.5, 0.001);",
+                  "});",
+                  "pm.test(\"price = ingredientsCost + 20 % = 4.20\", () => {",
+                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
+                  "  pm.expect(p.price).to.be.closeTo(4.20, 0.01);",
+                  "});",
+                  "pm.test(\"vegetarian = false (solo si todos sus ingredientes lo son)\", () => {",
+                  "  pm.expect(p.vegetarian).to.eql(false);",
+                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
+                  "});",
+                  "pm.collectionVariables.set(\"pizzaMixId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{pizzaMixName}}\",\n  \"description\": \"Pizza de pruebas no vegetariana\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingCId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Obtener pizza vegetal por id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "",
+                  "const pizzaSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    vegetarian: { type: \"boolean\" },",
+                  "    ingredients: { type: \"array\", minItems: 1 },",
+                  "    ingredientsCost: { type: \"number\" },",
+                  "    profitMargin: { type: \"number\" },",
+                  "    price: { type: \"number\" }",
+                  "  }",
+                  "};",
+                  "const p = pm.response.json();",
+                  "const v = (k) => pm.collectionVariables.get(k);",
+                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
+                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaVegName\")));",
+                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
+                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingBId\"))].sort((a, b) => a - b);",
+                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
+                  "});",
+                  "pm.test(\"ingredientsCost = suma de costes = 2.25\", () => {",
+                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(2.25, 0.001);",
+                  "});",
+                  "pm.test(\"price = ingredientsCost + 20 % = 2.70\", () => {",
+                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
+                  "  pm.expect(p.price).to.be.closeTo(2.70, 0.01);",
+                  "});",
+                  "pm.test(\"vegetarian = true (solo si todos sus ingredientes lo son)\", () => {",
+                  "  pm.expect(p.vegetarian).to.eql(true);",
+                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
+                  "});",
+                  "pm.test(\"description persistida\", () => pm.expect(p.description).to.eql(\"Pizza de pruebas vegetariana\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaVegId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Listar pizzas (público)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "const v = (k) => Number(pm.collectionVariables.get(k));",
+                  "pm.test(\"Es un array\", () => pm.expect(list).to.be.an(\"array\"));",
+                  "pm.test(\"Incluye las dos pizzas creadas\", () => pm.expect(list.map(p => p.id)).to.include.members([v(\"pizzaVegId\"), v(\"pizzaMixId\")]));",
+                  "pm.test(\"Todas cumplen price = ingredientsCost + 20 %\", () => {",
+                  "  list.forEach(p => pm.expect(p.price, p.name).to.be.closeTo(p.ingredientsCost * 1.2, 0.01));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Filtrar por name (único de la ejecución)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "pm.test(\"Devuelve exactamente la pizza vegetal\", () => {",
+                  "  pm.expect(list).to.have.lengthOf(1);",
+                  "  pm.expect(list[0].id).to.eql(Number(pm.collectionVariables.get(\"pizzaVegId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas?name={{pizzaVegName}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "{{pizzaVegName}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Filtrar por runId + vegetarian=true",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "pm.test(\"Solo la pizza vegetal de esta ejecución\", () => {",
+                  "  pm.expect(list.map(p => p.id)).to.eql([Number(pm.collectionVariables.get(\"pizzaVegId\"))]);",
+                  "});",
+                  "pm.test(\"Todas son vegetarianas\", () => pm.expect(list.every(p => p.vegetarian)).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas?name={{runId}}&vegetarian=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "{{runId}}"
+                },
+                {
+                  "key": "vegetarian",
+                  "value": "true"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Filtrar por runId + vegetarian=false",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "pm.test(\"Solo la pizza mixta de esta ejecución\", () => {",
+                  "  pm.expect(list.map(p => p.id)).to.eql([Number(pm.collectionVariables.get(\"pizzaMixId\"))]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas?name={{runId}}&vegetarian=false",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "{{runId}}"
+                },
+                {
+                  "key": "vegetarian",
+                  "value": "false"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Filtrar por runId + maxPrice=3",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "pm.test(\"Solo la pizza vegetal (2.70 <= 3; la mixta cuesta 4.20)\", () => {",
+                  "  pm.expect(list.map(p => p.id)).to.eql([Number(pm.collectionVariables.get(\"pizzaVegId\"))]);",
+                  "});",
+                  "pm.test(\"Ningún precio supera maxPrice\", () => pm.expect(list.every(p => p.price <= 3)).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas?name={{runId}}&maxPrice=3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "{{runId}}"
+                },
+                {
+                  "key": "maxPrice",
+                  "value": "3"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Filtrar por name inexistente -> lista vacía",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Lista vacía\", () => pm.expect(pm.response.json()).to.be.an(\"array\").that.is.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas?name=no-existe-{{runId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "no-existe-{{runId}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Modificar pizza vegetal (A+B+C) -> 5.10, deja de ser veg",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "",
+                  "const pizzaSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    vegetarian: { type: \"boolean\" },",
+                  "    ingredients: { type: \"array\", minItems: 1 },",
+                  "    ingredientsCost: { type: \"number\" },",
+                  "    profitMargin: { type: \"number\" },",
+                  "    price: { type: \"number\" }",
+                  "  }",
+                  "};",
+                  "const p = pm.response.json();",
+                  "const v = (k) => pm.collectionVariables.get(k);",
+                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
+                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaVegName\")));",
+                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
+                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingBId\")), Number(v(\"ingCId\"))].sort((a, b) => a - b);",
+                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
+                  "});",
+                  "pm.test(\"ingredientsCost = suma de costes = 4.25\", () => {",
+                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(4.25, 0.001);",
+                  "});",
+                  "pm.test(\"price = ingredientsCost + 20 % = 5.10\", () => {",
+                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
+                  "  pm.expect(p.price).to.be.closeTo(5.10, 0.01);",
+                  "});",
+                  "pm.test(\"vegetarian = false (solo si todos sus ingredientes lo son)\", () => {",
+                  "  pm.expect(p.vegetarian).to.eql(false);",
+                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaVegId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{pizzaVegName}}\",\n  \"description\": \"Ahora lleva C\",\n  \"ingredientIds\": [\n    {{ingAId}},\n    {{ingBId}},\n    {{ingCId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Modificar coste de C (2.50)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "",
+                  "const ingredientSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    cost: { type: \"number\" },",
+                  "    vegetarian: { type: \"boolean\" }",
+                  "  }",
+                  "};",
+                  "const i = pm.response.json();",
+                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
+                  "pm.test(\"Datos persistidos correctamente\", () => {",
+                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingCName\"));",
+                  "  pm.expect(i.cost).to.be.closeTo(2.5, 0.001);",
+                  "  pm.expect(i.vegetarian).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingCId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{ingCName}}\",\n  \"cost\": 2.5,\n  \"vegetarian\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "El precio de la pizza mixta se recalcula -> 4.80",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "",
+                  "const pizzaSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"vegetarian\", \"ingredients\", \"ingredientsCost\", \"profitMargin\", \"price\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    vegetarian: { type: \"boolean\" },",
+                  "    ingredients: { type: \"array\", minItems: 1 },",
+                  "    ingredientsCost: { type: \"number\" },",
+                  "    profitMargin: { type: \"number\" },",
+                  "    price: { type: \"number\" }",
+                  "  }",
+                  "};",
+                  "const p = pm.response.json();",
+                  "const v = (k) => pm.collectionVariables.get(k);",
+                  "pm.test(\"Cumple el esquema PizzaResponse\", () => pm.response.to.have.jsonSchema(pizzaSchema));",
+                  "pm.test(\"Nombre correcto\", () => pm.expect(p.name).to.eql(v(\"pizzaMixName\")));",
+                  "pm.test(\"Contiene exactamente los ingredientes enviados\", () => {",
+                  "  const expected = [Number(v(\"ingAId\")), Number(v(\"ingCId\"))].sort((a, b) => a - b);",
+                  "  pm.expect(p.ingredients.map(i => i.id).sort((a, b) => a - b)).to.eql(expected);",
+                  "});",
+                  "pm.test(\"ingredientsCost = suma de costes = 4\", () => {",
+                  "  const sum = p.ingredients.reduce((acc, i) => acc + i.cost, 0);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(sum, 0.001);",
+                  "  pm.expect(p.ingredientsCost).to.be.closeTo(4, 0.001);",
+                  "});",
+                  "pm.test(\"price = ingredientsCost + 20 % = 4.80\", () => {",
+                  "  pm.expect(p.price).to.be.closeTo(p.ingredientsCost * 1.2, 0.01);",
+                  "  pm.expect(p.price).to.be.closeTo(4.80, 0.01);",
+                  "});",
+                  "pm.test(\"vegetarian = false (solo si todos sus ingredientes lo son)\", () => {",
+                  "  pm.expect(p.vegetarian).to.eql(false);",
+                  "  pm.expect(p.vegetarian).to.eql(p.ingredients.every(i => i.vegetarian));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaMixId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaMixId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Crear pizza sin token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA sin token {{runId}}\",\n  \"ingredientIds\": [\n    {{ingAId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Crear pizza sin ingredientes -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA sin ingredientes {{runId}}\",\n  \"ingredientIds\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear pizza sin name -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ingredientIds\": [\n    {{ingAId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Crear pizza con ingrediente inexistente -> 4xx",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 4xx (petición rechazada)\", () => pm.expect(pm.response.code).to.be.within(400, 499));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA ingrediente fantasma {{runId}}\",\n  \"ingredientIds\": [\n    999999999\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Obtener pizza inexistente -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/999999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "999999999"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Borrar ingrediente en uso (C) -> 4xx",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 4xx (petición rechazada)\", () => pm.expect(pm.response.code).to.be.within(400, 499));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingCId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "El ingrediente en uso sigue existiendo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "",
+                  "const ingredientSchema = {",
+                  "  type: \"object\",",
+                  "  required: [\"id\", \"name\", \"cost\", \"vegetarian\"],",
+                  "  properties: {",
+                  "    id: { type: \"integer\" },",
+                  "    name: { type: \"string\" },",
+                  "    cost: { type: \"number\" },",
+                  "    vegetarian: { type: \"boolean\" }",
+                  "  }",
+                  "};",
+                  "const i = pm.response.json();",
+                  "pm.test(\"Cumple el esquema IngredientResponse\", () => pm.response.to.have.jsonSchema(ingredientSchema));",
+                  "pm.test(\"Datos persistidos correctamente\", () => {",
+                  "  pm.expect(i.name).to.eql(pm.collectionVariables.get(\"ingCName\"));",
+                  "  pm.expect(i.cost).to.be.closeTo(2.5, 0.001);",
+                  "  pm.expect(i.vegetarian).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingCId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Borrar pizza sin token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaMixId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaMixId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "99 - Teardown",
+      "description": "Borra todo lo creado y cierra la sesión, dejando la base de datos como estaba.",
+      "item": [
+        {
+          "name": "Borrar pizza vegetal",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaVegId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Borrar pizza mixta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaMixId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaMixId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Pizza borrada -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas/{{pizzaVegId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas",
+                "{{pizzaVegId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Borrar ingrediente A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingAId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingAId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Borrar ingrediente B",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingBId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingBId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Borrar ingrediente C (ya no está en uso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingCId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Ingrediente borrado -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ingredients/{{ingCId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ingredients",
+                "{{ingCId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "No queda ninguna pizza de esta ejecución",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Lista vacía\", () => pm.expect(pm.response.json()).to.be.an(\"array\").that.is.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pizzas?name={{runId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pizzas"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "{{runId}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200/204 (éxito sin cuerpo)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Token invalidado tras logout -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "[\"accessToken\", \"refreshToken\", \"ingAId\", \"ingBId\", \"ingCId\", \"pizzaVegId\", \"pizzaMixId\"]",
+                  "  .forEach(k => pm.collectionVariables.unset(k));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
