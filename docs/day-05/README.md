@@ -330,7 +330,88 @@ if (!pm.environment.get("pizzaId")) {
 
 ---
 
-## 8. Práctica
+## 8. Mock servers, Specs y Copy link
+
+### 8.1 Mock server: una API falsa que responde con tus ejemplos
+
+Un **mock server** es una URL en la nube de Postman (`https://<id>.mock.pstmn.io`) que **no ejecuta lógica**. Recibe una request, busca entre los **ejemplos guardados** de la colección el que mejor encaja y lo devuelve tal cual.
+
+**Para qué sirve:**
+
+| Situación | Cómo ayuda el mock |
+|---|---|
+| El frontend o la app móvil empiezan antes de que exista el backend | Trabajan contra el mock con respuestas realistas desde el día 1 |
+| Diseño *API-first* | Se acuerda el contrato, se mockea y se valida con los consumidores antes de programar |
+| Errores difíciles de provocar en la API real | 500, 503, respuestas lentas, cuerpos raros: basta con guardar un ejemplo |
+| Dependencias de terceros (pasarela de pago, envío de SMS…) | No gastas dinero ni dependes de su disponibilidad |
+| Probar la propia colección de tests | Compruebas que tus tests detectan un 404 o un JSON mal formado sin romper la API |
+
+**Paso a paso:**
+
+1. **Guarda ejemplos.** En *Obtener pizza*, pulsa **Send** y luego **Save Response → Save as example**. Repite con una pizza que no existe para tener un ejemplo **404**. Un ejemplo se puede editar a mano: status, cabeceras y body.
+2. **Crea el mock.** En la colección, **⋯ → Mock collection** (o **New → Mock server → Select an existing collection**).
+   - **Name:** `Pizzería mock`.
+   - **Environment:** opcional, solo si los ejemplos usan variables.
+   - **Simulate a fixed network delay:** útil para probar *timeouts*.
+   - **Make mock server private:** obliga a enviar la cabecera `x-api-key` con una API key de Postman.
+3. **Copia la URL** del mock y crea un entorno `pizzeria-mock` con `baseUrl = https://<id>.mock.pstmn.io`.
+4. **Cambia de entorno** y vuelve a lanzar las requests. Los tests que pasaban contra la API real deberían pasar contra el mock.
+
+**Cómo elige el ejemplo (matching):** filtra por **método**, puntúa la **ruta** y los **query params**, y devuelve el ejemplo con mejor puntuación. Si hay empate, gana el que devuelve 200. Puedes forzar la elección con cabeceras:
+
+| Cabecera | Efecto |
+|---|---|
+| `x-mock-response-code: 404` | Solo considera ejemplos con ese status |
+| `x-mock-response-name: Pizza no encontrada` | Elige el ejemplo por su nombre |
+| `x-mock-match-request-body: true` | Exige que el body de la request coincida con el del ejemplo |
+| `x-mock-match-request-headers: true` | Exige que las cabeceras coincidan |
+
+**Ejemplos dinámicos:** si en la URL del ejemplo escribes una variable que no existe, como `{{baseUrl}}/api/pizzas/{{pizzaId}}`, actúa de **comodín**. Captura cualquier id, y puedes devolverlo en el body del ejemplo con `"id": {{pizzaId}}`.
+
+> **Límites:** el mock está en la nube, así que es público (salvo que lo hagas privado) y **no puede ver tu `localhost`**. El plan Free tiene un número limitado de llamadas al mock al mes (en el momento de escribir esto, unas 1.000). Consulta tu consumo en *Resource usage*.
+
+### 8.2 Specs (Spec Hub): el contrato dentro de Postman
+
+**Spec Hub** (barra lateral → **Specs**) es el lugar de Postman para escribir y mantener **especificaciones de API**: OpenAPI 2.0/3.0/3.1, AsyncAPI, protobuf, GraphQL y Smithy.
+
+Una *spec* es el **contrato** de la API: qué endpoints hay, qué recibe cada uno, qué devuelve y con qué códigos. Una colección es *una forma de probar* ese contrato. El contrato manda.
+
+| Para qué sirve | Detalle |
+|---|---|
+| **Fuente única de verdad** | Backend, frontend y QA trabajan contra el mismo documento |
+| **Generar la colección** | **Generate collection** crea carpetas, requests y **ejemplos de respuesta**, que son la materia prima del mock server |
+| **Mantenerla sincronizada** | Si cambia la spec, la colección generada se actualiza; también se pueden llevar cambios de la colección a la spec |
+| **Validación y linting** | Marca errores de sintaxis y reglas de gobierno (nombres, descripciones, códigos de error documentados…) |
+| **Documentación** | Vista previa de la documentación a partir de la spec |
+| **Tests de contrato** | Los `components.schemas` son los JSON Schema que usamos en el apartado 1 |
+
+**Con la Pizzería API:**
+
+1. **Specs → Import** y pega `http://localhost:8080/v3/api-docs`, o importa el fichero descargado de esa URL.
+2. Revisa los avisos del linter. Cada aviso es una pista de algo que el contrato no explica bien.
+3. **Generate collection.** Compárala con la colección que has escrito a mano: ¿te falta algún endpoint o algún código de error?
+4. Copia `components.schemas.PizzaResponse` a la variable `pizzaSchema` para los tests de esquema.
+
+> Flujo *API-first* completo: **spec → colección generada (con ejemplos) → mock server → consumidores trabajando → implementación real → tests de contrato contra la API real.**
+
+### 8.3 Copy link: compartir un elemento concreto con el equipo
+
+En cualquier colección, carpeta, request o ejemplo hay un icono **Copy link** (también en **⋯ → Share**). Genera una URL de Postman que lleva a un compañero **exactamente a ese elemento**, dentro del workspace del equipo:
+
+- "Mira esta request, falla con este body": pegas el enlace en Slack o en el ticket y el compañero la abre tal cual.
+- Con **Share** puedes incluir el **entorno** seleccionado, e incluso la **respuesta** de la request (en requests creadas desde octubre de 2024).
+- Si quien abre el enlace no es del equipo, se le pide **solicitar acceso** y un administrador lo aprueba.
+
+**Por qué no lo veréis en clase:** el enlace solo tiene sentido dentro de un **workspace de equipo**. Desde el 1 de marzo de 2026 el plan **Free es de un único usuario**, así que la colaboración (workspaces compartidos, enlaces a elementos, comentarios) requiere un plan de pago de equipo.
+
+**Alternativas en la versión gratuita:**
+- **Exportar** la colección en v2.1 y compartir el fichero (día 4).
+- **Versionarla en Git** junto al código (día 4). Es lo más profesional, porque la colección se revisa en las *pull requests* como cualquier otro fichero.
+- Compartir el **comando de Newman / Postman CLI** que la ejecuta (día 6).
+
+---
+
+## 9. Práctica
 
 1. Añade el esquema de la pizza a **Obtener pizza** y el de ingrediente a **Obtener ingrediente**. Rompe la API a propósito (pide `/api/pizzas` en una request con el esquema de *una* pizza) y lee el error.
 2. Añade los tests de arrays del apartado 2 a **Listar pizzas** y **Listar pizzas vegetarianas**.
@@ -342,6 +423,8 @@ if (!pm.environment.get("pizzaId")) {
 8. **Reto:** usa `pm.execution.setNextRequest` para que, si falla el login, la ejecución se detenga en lugar de producir 30 fallos en cascada.
 
 La solución de referencia está en [../day-06/pizzeria-api-tests.postman_collection.json](../day-06/pizzeria-api-tests.postman_collection.json). Es la que ejecutaremos con Newman el día 6.
+
+**Retos del día:** [RETOS.md](RETOS.md). Ábrelo con la vista previa de Markdown de VS Code (`Ctrl+Shift+V`) para desplegar las pistas y las soluciones.
 
 ---
 
@@ -356,3 +439,6 @@ La solución de referencia está en [../day-06/pizzeria-api-tests.postman_collec
 - [MDN — 422 Unprocessable Content](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/422)
 - [Introducción a las ejecuciones de colecciones (Runner)](https://learning.postman.com/docs/tests-and-scripts/running-collections/intro-to-collection-runs/)
 - [Construir flujos de ejecución con `setNextRequest`](https://learning.postman.com/docs/tests-and-scripts/running-collections/building-workflows/)
+- [Mock servers: llamadas y algoritmo de matching](https://learning.postman.com/docs/design-apis/mock-apis/matching-algorithm)
+- [Spec Hub: diseñar APIs en Postman](https://learning.postman.com/docs/design-apis/specifications/overview)
+- [Compartir elementos de Postman (Copy link / Share)](https://learning.postman.com/docs/collaborating-in-postman/sharing)
