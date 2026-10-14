@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cierre del curso Postman</title>
+<style>
+  :root {
+    --ink: #1c1c28;
+    --ink-2: #4a4a5a;
+    --muted: #8a8a99;
+    --paper: #ffffff;
+    --tint: #f2f3f5;
+    --orange: #ff6c37;
+    --green: #2e8b57;
+    --cheese: #f2b134;
+    --red: #c0392b;
+    --blue: #3d6db5;
+    --code-bg: #1c1c28;
+    --code-fg: #f2f3f5;
+    --code-comment: #8a8a99;
+    --code-string: #9fd8a8;
+    --code-key: #ffb08f;
+    --sans: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+    --mono: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #0e0e15; overflow: hidden; font-family: var(--sans); }
+
+  /* ---------- Deck frame ---------- */
+  #viewport { position: fixed; inset: 0; display: grid; place-items: center; }
+  #deck { position: relative; width: 1280px; height: 720px; transform-origin: center center; }
+  .slide {
+    position: absolute; inset: 0; padding: 48px 64px 64px;
+    background: var(--paper); color: var(--ink);
+    display: flex; flex-direction: column;
+    opacity: 0; visibility: hidden; transition: opacity .35s ease;
+    border-radius: 6px; overflow: hidden;
+  }
+  .slide.active { opacity: 1; visibility: visible; }
+  .slide.dark { background: var(--ink); color: var(--paper); }
+  .slide footer {
+    position: absolute; left: 64px; right: 64px; bottom: 24px;
+    display: flex; justify-content: space-between; font-size: 13px; color: var(--muted);
+  }
+
+  .kicker { font-size: 17px; font-weight: 700; color: var(--orange); letter-spacing: .02em; text-transform: uppercase; }
+  h1 { font-size: 52px; line-height: 1.1; font-weight: 800; margin: 6px 0 0; letter-spacing: -.01em; }
+  h3 { font-size: 22px; font-weight: 700; margin-bottom: 16px; }
+  p, li { font-size: 23px; line-height: 1.4; }
+  .small { font-size: 19px; color: var(--ink-2); line-height: 1.35; }
+  .dark .small { color: #c9c9d3; }
+  .note { font-size: 19px; font-style: italic; color: var(--ink-2); }
+  .grow { min-height: 0; }
+  .body { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; padding: 20px 0 28px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+  .card { background: var(--tint); border-radius: 12px; padding: 18px 20px; }
+  .card.dark { background: var(--ink); color: var(--paper); }
+  .card.accent { background: var(--orange); color: #fff; }
+  .card b, .card strong { display: block; font-size: 22px; margin-bottom: 4px; }
+  .mono, pre.code { font-family: var(--mono); font-variant-ligatures: none; }
+
+  .ico {
+    flex: none; width: 58px; height: 58px; border-radius: 50%;
+    background: var(--orange); display: grid; place-items: center;
+  }
+  .ico svg { width: 28px; height: 28px; stroke: #fff; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .ico.ink { background: var(--ink); }
+  .ico.green { background: var(--green); }
+  .ico.red { background: var(--red); }
+  .row { display: flex; gap: 16px; align-items: flex-start; }
+
+  pre.code {
+    background: var(--code-bg); color: var(--code-fg); border-radius: 12px;
+    padding: 20px 24px; font-family: var(--mono); font-size: 19px; line-height: 1.5; white-space: pre; overflow: hidden;
+  }
+  pre.code .c { color: var(--code-comment); }
+  pre.code .s { color: var(--code-string); }
+  pre.code .k { color: var(--code-key); }
+
+  /* ---------- Portada ---------- */
+  .cover { justify-content: center; padding-left: 96px; }
+  .cover h1 { font-size: 72px; max-width: 760px; margin: 14px 0 22px; }
+  .cover .sub { font-size: 26px; color: #c9c9d3; max-width: 700px; }
+  .cover .badge {
+    position: absolute; right: 110px; top: 50%; transform: translateY(-50%);
+    width: 280px; height: 280px; border-radius: 50%; background: var(--orange);
+    display: grid; place-items: center;
+  }
+  .cover .badge svg { width: 140px; height: 140px; stroke: #fff; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .cover .badge.green { background: var(--green); }
+
+  /* ---------- Cifras ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 34px; }
+  .stat .n { font-size: 72px; font-weight: 800; color: var(--orange); line-height: 1; }
+  .stat .l { font-size: 19px; color: var(--ink-2); margin-top: 8px; }
+  .chart-title { font-size: 18px; color: var(--ink-2); margin-bottom: 12px; }
+  .bars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 18px; align-items: end; height: 250px; }
+  .bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .bar .v { font-size: 19px; font-weight: 700; margin-bottom: 6px; }
+  .bar .b { width: 100%; background: var(--orange); border-radius: 6px 6px 0 0; opacity: .85; }
+  .bar.hl .b { opacity: 1; }
+  .bar .t { font-size: 16px; color: var(--ink-2); margin-top: 8px; text-align: center; height: 40px; line-height: 1.2; }
+
+  /* ---------- Timeline ---------- */
+  .timeline { position: relative; display: grid; grid-template-columns: repeat(6, 1fr); }
+  .timeline::before { content: ""; position: absolute; left: 8%; right: 8%; top: 43px; height: 4px; background: var(--tint); }
+  .step { position: relative; text-align: center; padding: 0 8px; }
+  .step .dot {
+    width: 90px; height: 90px; margin: 0 auto 20px; border-radius: 50%; background: var(--ink); color: #fff;
+    display: grid; place-items: center; font-size: 36px; font-weight: 800; border: 4px solid #fff;
+  }
+  .step.now .dot { background: var(--orange); }
+  .step .d { font-weight: 700; font-size: 21px; }
+  .step.now .d { color: var(--orange); }
+  .step .t { font-size: 19px; color: var(--ink-2); margin-top: 6px; line-height: 1.3; }
+
+  /* ---------- Verbs / codes ---------- */
+  .verb { display: flex; align-items: center; gap: 20px; margin-bottom: 18px; }
+  .pill { width: 124px; padding: 11px 0; border-radius: 8px; color: #fff; font-family: var(--mono); font-weight: 700; font-size: 19px; text-align: center; }
+  .code-card { display: flex; align-items: center; gap: 22px; margin-bottom: 18px; padding: 18px 22px; }
+  .code-card .big { font-size: 44px; font-weight: 800; width: 100px; }
+
+  /* ---------- Scopes ---------- */
+  .scope { display: flex; justify-content: space-between; align-items: center; padding: 13px 20px; border-radius: 10px; background: var(--tint); margin-bottom: 11px; font-size: 21px; font-weight: 700; }
+  .scope span { font-family: var(--mono); font-weight: 400; font-size: 17px; color: var(--ink-2); }
+  .scope.win { background: var(--orange); color: #fff; }
+  .scope.win span { color: #fff; }
+  .env { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; align-items: center; margin-bottom: 16px; }
+  .env i { width: 14px; height: 14px; border-radius: 50%; display: block; }
+
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .gcard { padding: 24px; }
+  .grid2 > .card { padding: 26px 24px; }
+  .gcard .row { align-items: center; margin-bottom: 14px; }
+  .gcard .row b { margin: 0; }
+
+  /* ---------- Flow ---------- */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 34px; margin-bottom: 28px; }
+  .flow .card { text-align: center; position: relative; padding: 26px 14px; }
+  .flow .card .ico { margin: 0 auto 14px; width: 66px; height: 66px; }
+  .flow .card:not(:last-child)::after {
+    content: ""; position: absolute; right: -24px; top: 50%; transform: translateY(-50%);
+    border-left: 14px solid var(--muted); border-top: 9px solid transparent; border-bottom: 9px solid transparent;
+  }
+
+  /* ---------- Checklist ---------- */
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 26px 48px; }
+  .checks li { list-style: none; position: relative; padding-left: 44px; font-size: 23px; }
+  .checks svg { position: absolute; left: 0; top: 2px; width: 30px; height: 30px; stroke: var(--green); fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; margin-top: 1px; }
+
+  /* ---------- Ideas ---------- */
+  .ideas { display: grid; grid-template-columns: 1fr 1fr; gap: 56px 64px; }
+  .idea { display: flex; gap: 22px; }
+  .idea .num { font-size: 58px; font-weight: 800; color: var(--orange); line-height: 1; }
+  .idea b { display: block; font-size: 28px; margin-bottom: 8px; }
+
+  a { color: inherit; }
+  .res a { text-decoration: none; }
+  .res a:hover b { color: var(--orange); }
+
+  /* ---------- Controls ---------- */
+  #bar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.08); z-index: 5;
+  }
+  #progress { height: 100%; width: 0; background: var(--orange); transition: width .3s ease; }
+  #controls {
+    position: fixed; right: 16px; bottom: 14px; display: flex; gap: 8px; align-items: center; z-index: 6;
+    font: 13px var(--sans); color: #c9c9d3; opacity: .35; transition: opacity .2s;
+  }
+  #controls:hover { opacity: 1; }
+  #controls button {
+    background: rgba(255,255,255,.1); color: #fff; border: 0; border-radius: 6px; width: 32px; height: 28px; cursor: pointer; font-size: 15px;
+  }
+  #controls button:hover { background: var(--orange); }
+  #notes {
+    position: fixed; left: 16px; right: 16px; bottom: 54px; max-width: 900px; margin: 0 auto; z-index: 6;
+    background: rgba(28,28,40,.95); color: #f2f3f5; border-left: 0; border-radius: 10px; padding: 14px 18px;
+    font: 16px/1.45 var(--sans); display: none;
+  }
+  body.show-notes #notes { display: block; }
+  .speaker { display: none; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-pizza" viewBox="0 0 24 24"><path d="M12 2 2.5 20.5Q12 24 21.5 20.5Z"/><path d="M4.3 17Q12 20 19.7 17"/><circle cx="12" cy="10" r="1.3"/><circle cx="9.5" cy="15" r="1.3"/><circle cx="14.5" cy="14.5" r="1.3"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
+    <symbol id="i-clipboard" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><polyline points="9 14 11 16 15 12"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></symbol>
+    <symbol id="i-award" viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></symbol>
+  </defs>
+</svg>
+
+<div id="viewport">
+<div id="deck">
+
+<!-- 1 · Portada -->
+<section class="slide dark cover">
+  <div class="kicker">Cierre del curso · 14 de octubre de 2026</div>
+  <h1>Desarrollo de APIs con Postman</h1>
+  <p class="sub">Resumen de todo lo que hemos visto en 20 horas</p>
+  <div class="badge"><svg><use href="#i-pizza"/></svg></div>
+  <div class="speaker">Bienvenida a la última sesión. Repasamos en 15 minutos el recorrido completo antes de las preguntas finales.</div>
+</section>
+
+<!-- 2 · Cifras -->
+<section class="slide">
+  <div class="kicker">El curso en cifras</div>
+  <h1>20 horas de API en 6 sesiones</h1>
+  <div class="stats">
+    <div class="card stat"><div class="n">20</div><div class="l">horas de formación</div></div>
+    <div class="card stat"><div class="n">6</div><div class="l">sesiones de 3,5 h</div></div>
+    <div class="card stat"><div class="n">7</div><div class="l">módulos del temario</div></div>
+    <div class="card stat"><div class="n">1</div><div class="l">API de prácticas</div></div>
+  </div>
+  <div class="chart-title">Horas por módulo: el testing se llevó más de una cuarta parte del curso</div>
+  <div class="bars">
+    <div class="bar"><div class="v">2</div><div class="b" style="height:36%"></div><div class="t">Fundamentos REST</div></div>
+    <div class="bar"><div class="v">2,5</div><div class="b" style="height:45%"></div><div class="t">Postman desde cero</div></div>
+    <div class="bar"><div class="v">3</div><div class="b" style="height:55%"></div><div class="t">Entornos</div></div>
+    <div class="bar"><div class="v">3</div><div class="b" style="height:55%"></div><div class="t">Importaciones</div></div>
+    <div class="bar hl"><div class="v">5,5</div><div class="b" style="height:100%"></div><div class="t">Testing</div></div>
+    <div class="bar"><div class="v">2,5</div><div class="b" style="height:45%"></div><div class="t">Newman y CI</div></div>
+    <div class="bar"><div class="v">1,5</div><div class="b" style="height:27%"></div><div class="t">Buenas prácticas</div></div>
+  </div>
+  <div class="speaker">20 horas repartidas en 7 módulos. Testing fue el bloque más largo (5,5 h) porque es donde Postman aporta más valor al equipo.</div>
+</section>
+
+<!-- 3 · Pizzería API -->
+<section class="slide">
+  <div class="kicker">El hilo conductor</div>
+  <h1>Una API de pizzas para practicarlo todo</h1>
+  <div class="cols grow">
+    <div>
+      <p>API REST con Spring Boot y H2, con autenticación por token, contrato OpenAPI y varios entornos: lo mismo que os encontraréis en vuestros proyectos.</p>
+      <div class="card accent" style="margin:24px 0">
+        <div style="font-size:15px;font-weight:700;opacity:.9">Regla de negocio</div>
+        <div style="font-size:30px;font-weight:800;margin-top:4px">precio = Σ ingredientes × 1,20</div>
+      </div>
+      <p class="small"><strong style="color:var(--ink)">Postman solo ve HTTP.</strong> Todo lo aprendido sirve con vuestro framework Java siempre que exponga una API HTTP.</p>
+    </div>
+    <div>
+      <div class="card" style="margin-bottom:14px"><b class="mono"><span style="color:var(--blue)">●</span> /api/auth</b><span class="small">POST login · POST refresh · GET me · POST logout</span></div>
+      <div class="card" style="margin-bottom:14px"><b class="mono"><span style="color:var(--green)">●</span> /api/ingredients</b><span class="small">GET · GET /{id} · POST · PUT /{id} · DELETE /{id}</span></div>
+      <div class="card" style="margin-bottom:14px"><b class="mono"><span style="color:var(--orange)">●</span> /api/pizzas</b><span class="small">GET · GET /{id} · POST · PUT /{id} · DELETE /{id}</span></div>
+      <p class="small" style="color:var(--muted)">Swagger UI · OpenAPI · consola H2 · dev :8080 / staging :8081</p>
+    </div>
+  </div>
+  <div class="speaker">Recordad la regla del precio: la usamos el día 4 como ejemplo de test que comprueba lógica, no solo forma.</div>
+</section>
+
+<!-- 4 · Recorrido -->
+<section class="slide">
+  <div class="kicker">El recorrido</div>
+  <h1>Seis sesiones, un mismo hilo</h1>
+  <div class="timeline">
+    <div class="step"><div class="dot">1</div><div class="d">Lun 5 oct</div><div class="t">Fundamentos REST y Postman</div></div>
+    <div class="step"><div class="dot">2</div><div class="d">Mar 6 oct</div><div class="t">Colecciones, variables y entornos</div></div>
+    <div class="step"><div class="dot">3</div><div class="d">Mié 7 oct</div><div class="t">Entornos dinámicos e importaciones</div></div>
+    <div class="step"><div class="dot">4</div><div class="d">Jue 8 oct</div><div class="t">HAR, Git y primeros tests</div></div>
+    <div class="step"><div class="dot">5</div><div class="d">Mar 13 oct</div><div class="t">Tests avanzados, Runner y mocks</div></div>
+    <div class="step now"><div class="dot">6</div><div class="d">Mié 14 oct</div><div class="t">Newman, CI/CD y buenas prácticas</div></div>
+  </div>
+  <p class="note" style="text-align:center;margin-top:56px">Cada sesión construyó sobre la anterior: de una petición suelta a una colección que se ejecuta sola en un pipeline.</p>
+  <div class="speaker">Visión de conjunto. A partir de aquí, una diapositiva por sesión.</div>
+</section>
+
+<!-- 5 · Día 1 -->
+<section class="slide">
+  <div class="kicker">Día 1 · Lunes 5 de octubre</div>
+  <h1>Fundamentos de APIs REST</h1>
+  <div class="cols grow">
+    <div>
+      <h3>Verbos HTTP</h3>
+      <div class="verb"><div class="pill" style="background:var(--green)">GET</div><p>Leer un recurso o una colección</p></div>
+      <div class="verb"><div class="pill" style="background:var(--orange)">POST</div><p>Crear un recurso nuevo</p></div>
+      <div class="verb"><div class="pill" style="background:var(--blue)">PUT</div><p>Reemplazar un recurso completo</p></div>
+      <div class="verb"><div class="pill" style="background:var(--cheese);color:var(--ink)">PATCH</div><p>Modificar parte de un recurso</p></div>
+      <div class="verb"><div class="pill" style="background:var(--red)">DELETE</div><p>Borrar un recurso</p></div>
+    </div>
+    <div>
+      <h3>Códigos de estado</h3>
+      <div class="card code-card"><div class="big" style="color:var(--green)">2xx</div><div><b>Todo ha ido bien</b><span class="small">200 OK · 201 Created · 204 No Content</span></div></div>
+      <div class="card code-card"><div class="big" style="color:#c98a00">4xx</div><div><b>Error del cliente</b><span class="small">400 · 401 · 403 · 404 · 409</span></div></div>
+      <div class="card code-card"><div class="big" style="color:var(--red)">5xx</div><div><b>Error del servidor</b><span class="small">500 Internal Server Error · 503</span></div></div>
+    </div>
+  </div>
+  <p class="note" style="margin-top:28px">Además: anatomía de una request (URL, cabeceras, body), autenticación Bearer, JSON y primeros pasos en Postman.</p>
+  <div class="speaker">Recursos, verbos y códigos de estado: el vocabulario que usamos el resto del curso. Arrancamos la Pizzería API y lanzamos las primeras peticiones.</div>
+</section>
+
+<!-- 6 · Día 2 -->
+<section class="slide">
+  <div class="kicker">Día 2 · Martes 6 de octubre</div>
+  <h1>Colecciones, variables y entornos</h1>
+  <div class="cols grow">
+    <div>
+      <h3>Ámbitos: de más amplio a más concreto</h3>
+      <div class="scope" style="margin-right:80px">Global <span>pm.globals</span></div>
+      <div class="scope" style="margin-left:20px;margin-right:60px">Collection <span>pm.collectionVariables</span></div>
+      <div class="scope" style="margin-left:40px;margin-right:40px">Environment <span>pm.environment</span></div>
+      <div class="scope" style="margin-left:60px;margin-right:20px">Data <span>pm.iterationData</span></div>
+      <div class="scope win" style="margin-left:80px">Local <span>pm.variables.set</span></div>
+      <p class="note" style="margin-top:12px">Si dos ámbitos definen la misma variable, gana el más concreto.</p>
+    </div>
+    <div>
+      <h3>Un mismo request, tres servidores: <span class="mono" style="color:var(--orange)">{{baseUrl}}</span></h3>
+      <div class="card env"><i style="background:var(--green)"></i><b style="margin:0">dev <span class="mono small" style="font-weight:400">http://localhost:8080</span></b><span></span><span class="small">Desarrollo local</span></div>
+      <div class="card env"><i style="background:var(--cheese)"></i><b style="margin:0">staging <span class="mono small" style="font-weight:400">http://localhost:8081</span></b><span></span><span class="small">Otras contraseñas, tokens de 60 s</span></div>
+      <div class="card env"><i style="background:var(--red)"></i><b style="margin:0">prod</b><span></span><span class="small">Solo lectura y con mucho cuidado</span></div>
+      <p class="note" style="font-size:15px">También: valor inicial frente a valor actual, variables dinámicas (<span class="mono">{{$guid}}</span>, <span class="mono">{{$randomInt}}</span>) y pre-request scripts.</p>
+    </div>
+  </div>
+  <div class="speaker">La clave del día: ninguna URL escrita a mano. Cambiar de entorno es cambiar de servidor sin tocar la colección. Montamos dev y staging en dos puertos.</div>
+</section>
+
+<!-- 7 · Día 3 -->
+<section class="slide">
+  <div class="kicker">Día 3 · Miércoles 7 de octubre</div>
+  <h1>Entornos dinámicos e importaciones</h1>
+  <div class="cols grow">
+    <div>
+      <h3>Los scripts rellenan las variables</h3>
+<pre class="code" style="font-size:17px"><span class="c">// Tests del login</span>
+<span class="k">const</span> body = pm.response.json();
+pm.environment.set(<span class="s">"token"</span>, body.accessToken);
+
+<span class="c">// Tests del POST /api/pizzas</span>
+pm.environment.set(<span class="s">"pizzaId"</span>, body.id);</pre>
+      <div class="card row" style="margin-top:18px">
+        <div class="ico ink"><svg><use href="#i-lock"/></svg></div>
+        <div><b>Valores sensibles</b><span class="small">Tokens y contraseñas como secretos y nunca en el valor inicial, que es el que se comparte y se exporta.</span></div>
+      </div>
+    </div>
+    <div>
+      <h3>Cuatro formas de no empezar de cero</h3>
+      <div class="row" style="margin-bottom:18px"><div class="ico"><svg><use href="#i-file"/></svg></div><div><b style="font-size:22px">Fichero</b><div class="small">Colecciones y entornos en JSON v2.1</div></div></div>
+      <div class="row" style="margin-bottom:18px"><div class="ico"><svg><use href="#i-link"/></svg></div><div><b style="font-size:22px">URL</b><div class="small">Importar directamente desde un enlace</div></div></div>
+      <div class="row" style="margin-bottom:18px"><div class="ico"><svg><use href="#i-doc"/></svg></div><div><b style="font-size:22px">OpenAPI / Swagger</b><div class="small">Genera todas las requests desde el contrato</div></div></div>
+      <div class="row"><div class="ico"><svg><use href="#i-share"/></svg></div><div><b style="font-size:22px">Exportar entornos</b><div class="small">Compartirlos con el equipo sin secretos</div></div></div>
+    </div>
+  </div>
+  <div class="speaker">Guardar el token tras el login y capturar el id creado: la base del encadenamiento del día 5. Importar desde OpenAPI ahorra escribir requests a mano.</div>
+</section>
+
+<!-- 8 · Día 4 -->
+<section class="slide">
+  <div class="kicker">Día 4 · Jueves 8 de octubre</div>
+  <h1>HAR, Git y los primeros tests</h1>
+  <div class="grow" style="display:grid;grid-template-columns:5fr 7fr;gap:40px">
+    <div style="padding-top:8px">
+      <div class="row" style="margin-bottom:26px"><div class="ico ink"><svg><use href="#i-wifi"/></svg></div><div><b style="font-size:22px">Importar HAR</b><div class="small">Convertir tráfico capturado en el navegador en requests</div></div></div>
+      <div class="row" style="margin-bottom:26px"><div class="ico ink"><svg><use href="#i-share"/></svg></div><div><b style="font-size:22px">Exportar v2.1</b><div class="small">El formato estándar que entiende Newman</div></div></div>
+      <div class="row"><div class="ico ink"><svg><use href="#i-git"/></svg></div><div><b style="font-size:22px">Git</b><div class="small">La colección versionada junto al código</div></div></div>
+    </div>
+    <div>
+      <h3>El test que aporta valor comprueba la lógica</h3>
+<pre class="code"><span class="k">const</span> pizza = pm.response.json();
+
+pm.test(<span class="s">"price = coste × 1,20"</span>, () => {
+  <span class="k">const</span> esperado = Math.round(
+    pizza.ingredientsCost * 1.2 * 100) / 100;
+  pm.expect(pizza.price)
+    .to.be.closeTo(esperado, 0.001);
+});</pre>
+      <div class="card accent" style="margin-top:16px;font-size:19px;font-weight:700">¿Por qué closeTo y no equal? En JavaScript:<br><span class="mono">0.1 + 0.2 = 0.30000000000000004</span></div>
+    </div>
+  </div>
+  <div class="speaker">pm.test y pm.expect con Chai. Empezamos por status, tiempo y Content-Type, y acabamos en la regla de negocio del precio.</div>
+</section>
+
+<!-- 9 · Día 5 -->
+<section class="slide">
+  <div class="kicker">Día 5 · Martes 13 de octubre</div>
+  <h1>Tests avanzados y Collection Runner</h1>
+  <div class="grid3">
+    <div class="card gcard"><div class="row"><div class="ico"><svg><use href="#i-layers"/></svg></div><b>JSON Schema</b></div><div class="small">Valida forma y tipos de toda la respuesta de una vez</div></div>
+    <div class="card gcard"><div class="row"><div class="ico"><svg><use href="#i-list"/></svg></div><b>Arrays</b></div><div class="small">Longitud, elementos y propiedades anidadas</div></div>
+    <div class="card gcard"><div class="row"><div class="ico"><svg><use href="#i-link"/></svg></div><b>Encadenamiento</b></div><div class="small">El id del POST alimenta el GET, PUT y DELETE</div></div>
+    <div class="card gcard"><div class="row"><div class="ico"><svg><use href="#i-key"/></svg></div><b>Login automático</b></div><div class="small"><span class="mono">pm.sendRequest</span> en el pre-request de la colección</div></div>
+    <div class="card gcard"><div class="row"><div class="ico red"><svg><use href="#i-alert"/></svg></div><b>Tests de errores</b></div><div class="small">Validar que la API también falla bien: 400, 401, 404, 409</div></div>
+    <div class="card gcard"><div class="row"><div class="ico"><svg><use href="#i-play"/></svg></div><b>Collection Runner</b></div><div class="small">Ejecutar en orden y controlar el flujo desde los scripts</div></div>
+  </div>
+  <p class="small" style="margin-top:26px"><strong style="color:var(--orange)">Y además:</strong> mock servers con tus ejemplos · el contrato en Spec Hub · Copy link para compartir</p>
+  <div class="speaker">El día más denso del módulo de testing. De validar un campo a validar el esquema completo, y de requests sueltas a flujos encadenados.</div>
+</section>
+
+<!-- 10 · Login transparente -->
+<section class="slide">
+  <div class="kicker">Día 5 · Patrón destacado</div>
+  <h1>Login transparente para toda la colección</h1>
+  <div class="grow" style="display:grid;grid-template-columns:8fr 4fr;gap:36px">
+<pre class="code" style="font-size:18px"><span class="c">// Pre-request de la COLECCIÓN</span>
+<span class="k">const</span> token = pm.environment.get(<span class="s">"token"</span>);
+<span class="k">const</span> exp = Number(pm.environment.get(<span class="s">"tokenExpiresAt"</span>));
+<span class="k">if</span> (!token || Date.now() > exp - 10_000) {
+  pm.sendRequest({
+    url: pm.variables.replaceIn(<span class="s">"{{baseUrl}}/api/auth/login"</span>),
+    method: <span class="s">"POST"</span>, <span class="c">/* body con username y password */</span>
+  }, (err, res) => {
+    <span class="k">const</span> body = res.json();
+    pm.environment.set(<span class="s">"token"</span>, body.accessToken);
+    pm.environment.set(<span class="s">"tokenExpiresAt"</span>,
+      Date.now() + body.expiresIn * 1000);
+  });
+}</pre>
+    <div>
+      <div class="row" style="margin-bottom:26px"><div class="ico" style="font-weight:800;color:#fff;font-size:20px">1</div><div><b style="font-size:21px">¿Hay token vigente?</b><div class="small">Si no caduca en los próximos 10 s, no hace nada</div></div></div>
+      <div class="row" style="margin-bottom:26px"><div class="ico" style="font-weight:800;color:#fff;font-size:20px">2</div><div><b style="font-size:21px">Si no, login por debajo</b><div class="small"><span class="mono">pm.sendRequest</span> no aparece en la colección</div></div></div>
+      <div class="row"><div class="ico" style="font-weight:800;color:#fff;font-size:20px">3</div><div><b style="font-size:21px">Guarda token y caducidad</b><div class="small">Cualquier request funciona aunque se lance suelta</div></div></div>
+    </div>
+  </div>
+  <div class="speaker">Este patrón se mejora el día 6 usando el refresh token en lugar de repetir el login completo.</div>
+</section>
+
+<!-- 11 · Newman -->
+<section class="slide">
+  <div class="kicker">Día 6 · Miércoles 14 de octubre</div>
+  <h1>Newman: la colección en la terminal</h1>
+  <div class="grow" style="display:grid;grid-template-columns:7fr 4fr;gap:32px">
+    <div>
+<pre class="code" style="font-size:17.5px">npm install -g newman newman-reporter-htmlextra
+
+newman run pizzeria-api-tests.postman_collection.json \
+  -e pizzeria-dev.postman_environment.json \
+  -d data/ingredientes.csv \
+  -r cli,htmlextra,junit</pre>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:12px 22px;margin-top:24px;font-size:19px">
+        <span class="mono" style="color:var(--orange)">--folder "05 Errores"</span><span class="small">Ejecutar solo una carpeta</span>
+        <span class="mono" style="color:var(--orange)">--env-var "password=$SECRETO"</span><span class="small">Secretos inyectados desde el CI</span>
+        <span class="mono" style="color:var(--orange)">--bail</span><span class="small">Parar al primer fallo</span>
+        <span class="mono" style="color:var(--orange)">--export-environment</span><span class="small">Guardar tokens e ids capturados</span>
+      </div>
+    </div>
+    <div>
+      <div class="card dark" style="margin-bottom:18px">
+        <div style="color:var(--orange);font-weight:700;font-size:16px;margin-bottom:6px">Código de salida</div>
+        <div style="font-size:19px"><span style="font-size:40px;font-weight:800;color:#4cc27f">0</span>&nbsp; todo en verde</div>
+        <div style="font-size:19px"><span style="font-size:40px;font-weight:800;color:#ff6b5b">1</span>&nbsp; pipeline en rojo</div>
+      </div>
+      <div class="card">
+        <b>Data-driven testing</b>
+        <span class="small">Un CSV o JSON, una iteración por fila. En los scripts: <span class="mono">pm.iterationData.get("nombre")</span></span>
+      </div>
+    </div>
+  </div>
+  <div class="speaker">Newman ejecuta la misma colección fuera de Postman. El código de salida es lo que conecta los tests con el pipeline.</div>
+</section>
+
+<!-- 12 · CI/CD -->
+<section class="slide">
+  <div class="kicker">Día 6 · Integración continua</div>
+  <h1>Del commit al informe, sin abrir Postman</h1>
+  <div class="flow">
+    <div class="card"><div class="ico"><svg><use href="#i-upload"/></svg></div><b>git push</b><span class="small">Colección y entornos en el repo</span></div>
+    <div class="card"><div class="ico"><svg><use href="#i-sliders"/></svg></div><b>Pipeline</b><span class="small">GitHub Actions o Azure Pipelines</span></div>
+    <div class="card"><div class="ico"><svg><use href="#i-download"/></svg></div><b>Arranque</b><span class="small">API levantada e instalar Newman</span></div>
+    <div class="card"><div class="ico"><svg><use href="#i-terminal"/></svg></div><b>newman run</b><span class="small">Secretos con <span class="mono" style="white-space:nowrap">--env-var</span></span></div>
+    <div class="card"><div class="ico green"><svg><use href="#i-clipboard"/></svg></div><b>Informe JUnit</b><span class="small">Verde o rojo en cada commit</span></div>
+  </div>
+  <div class="grid2">
+    <div class="card row"><div class="ico ink"><svg><use href="#i-folder"/></svg></div><div><b>Plantillas listas</b><span class="small"><span class="mono">docs/day-06/ci</span> contiene el workflow de GitHub Actions y el YAML de Azure Pipelines.</span></div></div>
+    <div class="card row"><div class="ico ink"><svg><use href="#i-activity"/></svg></div><div><b>Monitors de Postman</b><span class="small">La colección se ejecuta en la nube cada cierto tiempo y avisa si algo deja de funcionar.</span></div></div>
+  </div>
+  <div class="speaker">Si no corre en Newman desde una máquina limpia, no está automatizado. El informe JUnit lo entienden tanto GitHub como Azure DevOps.</div>
+</section>
+
+<!-- 13 · Buenas prácticas -->
+<section class="slide">
+  <div class="kicker">Día 6 · Buenas prácticas y casos reales</div>
+  <h1>Colecciones de nivel profesional</h1>
+  <div class="grid2">
+    <div class="card row"><div class="ico"><svg><use href="#i-folder"/></svg></div><div><b>Estructura clara</b><span class="small">Carpetas numeradas por recurso y por flujo, con los casos de error junto a cada operación.</span></div></div>
+    <div class="card row"><div class="ico"><svg><use href="#i-code"/></svg></div><div><b>Scripts globales</b><span class="small">Tests comunes de tiempo, formato y errores a nivel de colección, no copiados en cada request.</span></div></div>
+    <div class="card row"><div class="ico"><svg><use href="#i-refresh"/></svg></div><div><b>Refresh automático</b><span class="small">Si el token caduca, se usa el refresh token antes de repetir el login completo.</span></div></div>
+    <div class="card row"><div class="ico"><svg><use href="#i-book"/></svg></div><div><b>Documentación y Flows</b><span class="small">Descripciones y ejemplos de respuesta publicados desde Postman; Flows para orquestar de forma visual.</span></div></div>
+  </div>
+  <div class="speaker">Cuatro hábitos que vimos en la última sesión con ejemplos de proyectos reales.</div>
+</section>
+
+<!-- 14 · Checklist -->
+<section class="slide">
+  <div class="kicker">Para llevar al proyecto</div>
+  <h1>Checklist antes de producción</h1>
+  <ul class="checks">
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>Ninguna URL escrita a mano: todo pasa por <span class="mono">{{baseUrl}}</span></span></li>
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>Los flujos crean sus datos y los borran al terminar</span></li>
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>Ningún secreto en valores iniciales ni ficheros versionados</span></li>
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>En verde con <span class="mono">newman run</span> desde una máquina limpia</span></li>
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>Autenticación heredada de la colección, con refresh automático</span></li>
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>Integrada en el pipeline con informe JUnit</span></li>
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>Tests globales de tiempo, formato y errores</span></li>
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>Documentada, con ejemplos de respuesta</span></li>
+    <li><svg viewBox="0 0 24 24"><use href="#i-check"/></svg><span>Cada request de escritura tiene al menos un caso de error</span></li>
+  </ul>
+  <div class="speaker">Usadla como lista de revisión antes de dar por buena cualquier colección del equipo.</div>
+</section>
+
+<!-- 15 · Ideas -->
+<section class="slide dark">
+  <div class="kicker">Si solo os quedáis con cuatro ideas</div>
+  <h1>Lo que os lleváis</h1>
+  <div class="ideas">
+    <div class="idea"><div class="num">01</div><div><b>Postman solo ve HTTP</b><p class="small">Sirve igual con vuestro framework Java que con Spring Boot.</p></div></div>
+    <div class="idea"><div class="num">02</div><div><b>Variables antes que valores</b><p class="small">Entornos y <span class="mono">{{variables}}</span> hacen que la colección viaje entre servidores.</p></div></div>
+    <div class="idea"><div class="num">03</div><div><b>Testear la lógica, no solo la forma</b><p class="small">Un 200 no garantiza que el precio esté bien calculado.</p></div></div>
+    <div class="idea"><div class="num">04</div><div><b>Si no corre en Newman, no está automatizado</b><p class="small">El pipeline es quien de verdad vigila la API.</p></div></div>
+  </div>
+  <div class="speaker">Las cuatro ideas fuerza del curso. Pedir a cada alumno que diga cuál le resulta más útil para su proyecto.</div>
+</section>
+
+<!-- 16 · Recursos -->
+<section class="slide">
+  <div class="kicker">Para seguir aprendiendo</div>
+  <h1>Recursos y próximos pasos</h1>
+  <div class="grid3 res">
+    <a class="card" href="https://academy.postman.com/" target="_blank" rel="noopener"><div class="ico" style="margin-bottom:14px"><svg><use href="#i-award"/></svg></div><b>Postman Academy</b><span class="small">Cursos oficiales gratuitos con insignias</span></a>
+    <a class="card" href="https://learning.postman.com/docs/getting-started/overview/" target="_blank" rel="noopener"><div class="ico" style="margin-bottom:14px"><svg><use href="#i-book"/></svg></div><b>Learning Center</b><span class="small">La documentación oficial de Postman</span></a>
+    <a class="card" href="https://developer.mozilla.org/es/docs/Web/HTTP/Guides/Overview" target="_blank" rel="noopener"><div class="ico" style="margin-bottom:14px"><svg><use href="#i-globe"/></svg></div><b>MDN: HTTP</b><span class="small">La mejor referencia de HTTP en español</span></a>
+  </div>
+  <div class="card dark" style="margin-top:28px">
+    <b style="color:var(--orange)">Todo el material sigue en el repositorio</b>
+    <span class="small"><span class="mono">docs/</span> con una carpeta por sesión · <span class="mono">pizzeria-api/</span> para practicar · <span class="mono">day-05/RETOS.md</span> con retos para seguir entrenando</span>
+  </div>
+  <div class="speaker">Recomendación: completar las insignias de Postman Academy y resolver los retos del día 5 con la API en local.</div>
+</section>
+
+<!-- 17 · Gracias -->
+<section class="slide dark cover">
+  <div class="kicker">Fin del curso</div>
+  <h1>¡Gracias!</h1>
+  <p class="sub">¿Preguntas?</p>
+  <div class="badge green"><svg><use href="#i-check"/></svg></div>
+  <div class="speaker">Turno de preguntas y encuesta de satisfacción.</div>
+</section>
+
+</div>
+</div>
+
+<div id="notes"></div>
+<div id="bar"><div id="progress"></div></div>
+<div id="controls">
+  <button id="prev" title="Anterior (←)">‹</button>
+  <span id="counter"></span>
+  <button id="next" title="Siguiente (→)">›</button>
+  <button id="toggle-notes" title="Notas del ponente (N)">N</button>
+  <button id="fs" title="Pantalla completa (F)">⛶</button>
+</div>
+
+<script>
+(() => {
+  const deck = document.getElementById("deck");
+  const slides = [...document.querySelectorAll(".slide")];
+  const counter = document.getElementById("counter");
+  const progress = document.getElementById("progress");
+  const notes = document.getElementById("notes");
+  let current = 0;
+
+  // Footer with slide number on light/content slides (not on covers)
+  slides.forEach((s, i) => {
+    if (s.classList.contains("cover")) return;
+    const f = document.createElement("footer");
+    f.innerHTML = `<span>Desarrollo de APIs con Postman · Cierre del curso</span>`;
+    s.appendChild(f);
+  });
+
+  // Content after the title is centred vertically in the remaining space
+  slides.forEach(s => {
+    if (s.classList.contains("cover")) return;
+    const h1 = s.querySelector(":scope > h1");
+    const body = document.createElement("div");
+    body.className = "body";
+    [...s.children]
+      .filter(c => c !== h1 && !c.classList.contains("kicker") && !c.classList.contains("speaker") && c.tagName !== "FOOTER")
+      .forEach(c => body.appendChild(c));
+    h1.after(body);
+  });
+
+  function fit() {
+    const scale = Math.min(window.innerWidth / 1280, (window.innerHeight - 8) / 720);
+    deck.style.transform = `scale(${scale})`;
+  }
+
+  function show(n) {
+    current = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, i) => s.classList.toggle("active", i === current));
+    counter.textContent = `${current + 1} / ${slides.length}`;
+    progress.style.width = `${((current + 1) / slides.length) * 100}%`;
+    const sp = slides[current].querySelector(".speaker");
+    notes.textContent = sp ? sp.textContent : "";
+    if (location.hash !== `#${current + 1}`) history.replaceState(null, "", `#${current + 1}`);
+  }
+
+  function fullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.();
+  }
+
+  document.addEventListener("keydown", e => {
+    if (["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"].includes(e.key)) { e.preventDefault(); show(current + 1); }
+    else if (["ArrowLeft", "ArrowUp", "PageUp", "Backspace"].includes(e.key)) { e.preventDefault(); show(current - 1); }
+    else if (e.key === "Home") show(0);
+    else if (e.key === "End") show(slides.length - 1);
+    else if (e.key.toLowerCase() === "f") fullscreen();
+    else if (e.key.toLowerCase() === "n") document.body.classList.toggle("show-notes");
+  });
+
+  let touchX = null;
+  document.addEventListener("touchstart", e => { touchX = e.touches[0].clientX; });
+  document.addEventListener("touchend", e => {
+    if (touchX === null) return;
+    const dx = e.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 50) show(current + (dx < 0 ? 1 : -1));
+    touchX = null;
+  });
+
+  document.getElementById("prev").onclick = () => show(current - 1);
+  document.getElementById("next").onclick = () => show(current + 1);
+  document.getElementById("fs").onclick = fullscreen;
+  document.getElementById("toggle-notes").onclick = () => document.body.classList.toggle("show-notes");
+  window.addEventListener("resize", fit);
+  window.addEventListener("hashchange", () => show(parseInt(location.hash.slice(1), 10) - 1 || 0));
+
+  fit();
+  show(parseInt(location.hash.slice(1), 10) - 1 || 0);
+})();
+</script>
+</body>
+</html>

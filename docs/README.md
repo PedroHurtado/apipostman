@@ -51,6 +51,12 @@ cd pizzeria-api
 
 El cliente trabaja en Java con un framework propio. Postman no depende de la tecnología del servidor: solo ve peticiones y respuestas HTTP. La API de pizzas imita lo que el equipo encontrará en sus proyectos: recursos REST, validaciones, códigos de error coherentes, autenticación con token, un contrato OpenAPI y varios entornos. Todo lo que se aprende en el curso sirve para su framework siempre que exponga HTTP.
 
+## Presentación de cierre
+
+Resumen del curso en diapositivas HTML: [cierre/index.html](cierre/index.html) (ábrela en el navegador o con Live Preview en VS Code; ← → para navegar, F pantalla completa, N notas).
+
+Versión publicada en Claude: https://claude.ai/artifact/GvhRFjvyq8CedsCQ7D3kpP
+
 ## Material complementario
 
 - [Postman Academy](https://academy.postman.com/): cursos oficiales gratuitos con insignias.
